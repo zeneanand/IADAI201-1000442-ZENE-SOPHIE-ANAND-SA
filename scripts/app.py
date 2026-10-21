@@ -60,7 +60,7 @@ st.markdown("""
 - Low congestion: occupancy below 40%
 - Moderate congestion: occupancy from 40% to 75%
 - High congestion: occupancy above 75%
-""")            """
+""")        
         )
         return
     if mode.startswith("Full"):
