@@ -1,8 +1,10 @@
 
-    with st.sidebar:
-        st.header("How it works")
-        st.markdown(
-            """
+import streamlit as st
+
+with st.sidebar:
+    st.title("ParkVision")
+    st.write("Parking Space Detection")
+
 **Input:** parking lot image  
 **Output:** slot-wise Occupied / Empty
 **Approach:** crop-based classification  
