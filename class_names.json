@@ -1,0 +1,6 @@
+import json
+
+class_names = ["Empty", "Occupied"]
+
+with open("/content/class_names.json", "w") as f:
+    json.dump(class_names, f, indent=4)
