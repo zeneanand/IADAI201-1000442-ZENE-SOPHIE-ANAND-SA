@@ -61,7 +61,6 @@ st.markdown("""
 - Moderate congestion: occupancy from 40% to 75%
 - High congestion: occupancy above 75%
 """)        
-        )
         return
     if mode.startswith("Full"):
         slots = predict_parking_lot(model, image, rows, cols)
