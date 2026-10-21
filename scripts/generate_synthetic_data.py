@@ -1,3 +1,10 @@
+from __future__ import annotations
+import argparse
+from pathlib import Path
+import random
+import cv2
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 def asphalt(h: int, w: int, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)

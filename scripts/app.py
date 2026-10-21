@@ -27,9 +27,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# OpenCV diagnostic: remove after confirming deployment works.
-st.write("OpenCV version:", cv2.__version__)
-
 # --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
@@ -122,6 +119,17 @@ def crop_slots(image, grid_rows, grid_cols):
 # PREDICTION
 # --------------------------------------------------
 
+_preprocess_input = None
+
+
+def get_preprocess_input():
+    global _preprocess_input
+    if _preprocess_input is None:
+        from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+        _preprocess_input = preprocess_input
+    return _preprocess_input
+
+
 def predict_slot(model, crop):
     """
     Predict empty or occupied using the trained model.
@@ -138,11 +146,8 @@ def predict_slot(model, crop):
         axis=0,
     )
 
-    from tensorflow.keras.applications.mobilenet_v2 import (
-        preprocess_input,
-    )
-
-    batch = preprocess_input(batch)
+    preprocess = get_preprocess_input()
+    batch = preprocess(batch)
 
     prediction = np.asarray(
         model.predict(batch, verbose=0)
@@ -191,6 +196,38 @@ def demo_prediction(crop):
 
     # No calibrated confidence is available in demo mode.
     return label, None
+
+
+@st.cache_data(show_spinner=False)
+def classify_slots(_model, image, grid_mode, grid_rows, grid_cols):
+    """Segment image into slots and classify each slot, cached to prevent CPU thrashing."""
+    if grid_mode == "Full parking lot (grid)":
+        slots = crop_slots(image, grid_rows, grid_cols)
+    else:
+        slots = [{
+            "id": 1,
+            "row": 0,
+            "col": 0,
+            "x1": 0,
+            "y1": 0,
+            "x2": image.shape[1],
+            "y2": image.shape[0],
+            "crop": image,
+        }]
+
+    results = []
+    for slot in slots:
+        if _model is not None:
+            label, confidence = predict_slot(_model, slot["crop"])
+        else:
+            label, confidence = demo_prediction(slot["crop"])
+
+        results.append({
+            **slot,
+            "label": label,
+            "confidence": confidence,
+        })
+    return results
 
 
 # --------------------------------------------------
@@ -354,54 +391,18 @@ def main():
     st.subheader("Uploaded parking image")
     st.image(image, use_container_width=True)
 
-    # Generate grid cells or classify the entire image as one crop.
-    if mode == "Full parking lot (grid)":
-        slots = crop_slots(image, rows, cols)
+    # Generate and classify grid cells (cached to prevent CPU spikes on UI reruns).
+    results = []
+    with st.spinner("Analysing parking slots..."):
+        try:
+            results = classify_slots(model, image, mode, rows, cols)
+        except Exception as exc:
+            st.error(f"Analysis failed: {exc}")
+            st.stop()
 
-    else:
-        slots = [{
-            "id": 1,
-            "row": 0,
-            "col": 0,
-            "x1": 0,
-            "y1": 0,
-            "x2": image.shape[1],
-            "y2": image.shape[0],
-            "crop": image,
-        }]
-
-    if not slots:
+    if not results:
         st.error("Could not create valid image regions.")
         return
-
-    # Classify each region.
-    results = []
-
-    with st.spinner("Analysing parking slots..."):
-        for slot in slots:
-            try:
-                if model is not None:
-                    label, confidence = predict_slot(
-                        model,
-                        slot["crop"],
-                    )
-                else:
-                    label, confidence = demo_prediction(
-                        slot["crop"]
-                    )
-
-                results.append({
-                    **slot,
-                    "label": label,
-                    "confidence": confidence,
-                })
-
-            except Exception as exc:
-                st.error(
-                    f"Prediction failed for slot "
-                    f"{slot['id']}: {exc}"
-                )
-                st.stop()
 
     # Calculate insights.
     insights = build_insights([
