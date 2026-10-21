@@ -1,0 +1,6 @@
+%%writefile /content/requirements.txt
+streamlit
+tensorflow
+numpy
+pandas
+Pillow
