@@ -27,6 +27,9 @@ st.set_page_config(
     layout="wide",
 )
 
+# OpenCV diagnostic: remove after confirming deployment works.
+st.write("OpenCV version:", cv2.__version__)
+
 # --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
@@ -46,8 +49,8 @@ with st.sidebar:
 
     st.markdown("### How it works")
     st.write(
-        "The parking image is divided into slots. "
-        "Each slot is classified as empty or occupied."
+        "The image is divided into grid cells. "
+        "Each cell is classified as empty or occupied."
     )
 
 # --------------------------------------------------
@@ -56,12 +59,15 @@ with st.sidebar:
 
 @st.cache_resource
 def load_model():
-    """Load the trained Keras model if it exists."""
+    """Load the trained Keras model if available."""
     for path in MODEL_PATHS:
         if path.exists():
             try:
                 from tensorflow.keras.models import load_model
-                return load_model(path, compile=False), str(path)
+
+                model = load_model(path, compile=False)
+                return model, str(path)
+
             except Exception as exc:
                 raise RuntimeError(
                     f"Could not load model at {path}: {exc}"
@@ -75,13 +81,14 @@ def load_model():
 # --------------------------------------------------
 
 def load_image(uploaded_file):
-    """Convert uploaded image to an RGB NumPy array."""
-    image = Image.open(uploaded_file).convert("RGB")
-    return np.array(image)
+    """Convert an uploaded image into RGB format."""
+    return np.array(
+        Image.open(uploaded_file).convert("RGB")
+    )
 
 
 def crop_slots(image, grid_rows, grid_cols):
-    """Divide an image into equal-sized grid cells."""
+    """Split the image into equally sized grid cells."""
     height, width = image.shape[:2]
     slots = []
 
@@ -94,17 +101,19 @@ def crop_slots(image, grid_rows, grid_cols):
 
             crop = image[y1:y2, x1:x2]
 
-            if crop.size:
-                slots.append({
-                    "id": len(slots) + 1,
-                    "row": row,
-                    "col": col,
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "crop": crop,
-                })
+            if crop.size == 0:
+                continue
+
+            slots.append({
+                "id": len(slots) + 1,
+                "row": row,
+                "col": col,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "crop": crop,
+            })
 
     return slots
 
@@ -115,56 +124,60 @@ def crop_slots(image, grid_rows, grid_cols):
 
 def predict_slot(model, crop):
     """
-    Predict a slot using the trained model.
+    Predict empty or occupied using the trained model.
 
-    Expected output:
-    - Two-class model: index 0 = empty, index 1 = occupied
-    - One-output model: sigmoid probability for occupied
+    Assumptions:
+    - One output: sigmoid probability of occupied.
+    - Two outputs: [empty, occupied].
+    - Model preprocessing matches MobileNetV2 preprocessing.
     """
     resized = cv2.resize(crop, IMAGE_SIZE)
-    batch = np.expand_dims(resized.astype("float32"), axis=0)
 
-    # Standard MobileNetV2 preprocessing.
-    # The model must have been trained with compatible preprocessing.
-    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+    batch = np.expand_dims(
+        resized.astype(np.float32),
+        axis=0,
+    )
+
+    from tensorflow.keras.applications.mobilenet_v2 import (
+        preprocess_input,
+    )
+
     batch = preprocess_input(batch)
 
-    prediction = np.asarray(model.predict(batch, verbose=0))
-    prediction = prediction.reshape(-1)
+    prediction = np.asarray(
+        model.predict(batch, verbose=0)
+    ).reshape(-1)
 
     if prediction.size == 1:
         occupied_probability = float(prediction[0])
-        occupied_probability = float(
-            np.clip(occupied_probability, 0, 1)
-        )
+
     elif prediction.size == 2:
-        # Assumes model class order is [empty, occupied].
+        # Assumes output order: empty, occupied.
         occupied_probability = float(prediction[1])
+
     else:
         raise ValueError(
-            "The model must output one sigmoid probability "
-            "or two class probabilities."
+            "Expected a one-output or two-output classifier."
         )
 
-    label = (
-        "occupied"
-        if occupied_probability >= 0.5
-        else "empty"
+    occupied_probability = float(
+        np.clip(occupied_probability, 0.0, 1.0)
     )
 
-    confidence = (
-        occupied_probability
-        if label == "occupied"
-        else 1 - occupied_probability
-    )
+    if occupied_probability >= 0.5:
+        label = "occupied"
+        confidence = occupied_probability
+    else:
+        label = "empty"
+        confidence = 1.0 - occupied_probability
 
     return label, confidence
 
 
 def demo_prediction(crop):
     """
-    Demonstration-only heuristic when no trained model exists.
-    This is NOT a reliable parking classifier.
+    Simple visual heuristic for demo mode only.
+    This is NOT a trained or reliable parking classifier.
     """
     gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
     edges = cv2.Canny(gray, 80, 160)
@@ -172,32 +185,53 @@ def demo_prediction(crop):
     edge_ratio = float(np.mean(edges > 0))
     brightness = float(np.mean(gray))
 
-    # Arbitrary visual heuristic; do not use for real decisions.
     occupied = edge_ratio > 0.08 and brightness < 190
 
     label = "occupied" if occupied else "empty"
-    return label, 0.0
+
+    # No calibrated confidence is available in demo mode.
+    return label, None
 
 
 # --------------------------------------------------
-# INSIGHTS
+# OCCUPANCY INSIGHTS
 # --------------------------------------------------
 
 def build_insights(labels):
     total = len(labels)
-    occupied = sum(label == "occupied" for label in labels)
+
+    occupied = sum(
+        label == "occupied" for label in labels
+    )
+
     available = total - occupied
-    occupancy = (occupied / total * 100) if total else 0.0
+
+    occupancy = (
+        occupied / total * 100
+        if total > 0
+        else 0.0
+    )
 
     if occupancy < 40:
         congestion = "Low"
-        recommendation = "Slots may be available. Check the displayed predictions."
+        recommendation = (
+            "Low estimated occupancy. Check the predicted "
+            "empty slots before parking."
+        )
+
     elif occupancy <= 75:
         congestion = "Moderate"
-        recommendation = "Parking availability may be limited. Check individual slots."
+        recommendation = (
+            "Moderate estimated occupancy. Some spaces may "
+            "be available; check individual predictions."
+        )
+
     else:
         congestion = "High"
-        recommendation = "The lot may be busy. Verify the predictions before choosing another area."
+        recommendation = (
+            "High estimated occupancy. Verify the predictions "
+            "before looking for another parking area."
+        )
 
     return {
         "total": total,
@@ -209,16 +243,19 @@ def build_insights(labels):
     }
 
 
+# --------------------------------------------------
+# ANNOTATED IMAGE
+# --------------------------------------------------
+
 def draw_annotations(image, slots):
-    """Draw green boxes for empty slots and red for occupied slots."""
+    """Draw green boxes for empty and red boxes for occupied."""
     annotated = image.copy()
 
     for slot in slots:
-        color = (
-            (220, 50, 50)
-            if slot["label"] == "occupied"
-            else (30, 180, 60)
-        )
+        if slot["label"] == "occupied":
+            color = (230, 50, 50)
+        else:
+            color = (30, 180, 60)
 
         cv2.rectangle(
             annotated,
@@ -228,10 +265,17 @@ def draw_annotations(image, slots):
             3,
         )
 
+        text = f"S{slot['id']}: {slot['label']}"
+
+        text_y = min(
+            slot["y1"] + 22,
+            image.shape[0] - 5,
+        )
+
         cv2.putText(
             annotated,
-            f"S{slot['id']}: {slot['label']}",
-            (slot["x1"] + 5, min(slot["y1"] + 22, image.shape[0] - 5)),
+            text,
+            (slot["x1"] + 5, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
             color,
@@ -243,13 +287,13 @@ def draw_annotations(image, slots):
 
 
 # --------------------------------------------------
-# MAIN APPLICATION
+# MAIN STREAMLIT APPLICATION
 # --------------------------------------------------
 
 def main():
     st.title("🚗 ParkVision")
     st.caption(
-        "Parking occupancy analysis using image classification"
+        "Parking occupancy analysis using computer vision"
     )
 
     st.markdown(
@@ -258,51 +302,62 @@ def main():
         "**Approach:** Grid-based crop classification with MobileNetV2"
     )
 
+    # Load trained model, if available.
     try:
         model, model_path = load_model()
+
     except Exception as exc:
         st.error(f"Model loading failed: {exc}")
         st.stop()
 
     if model is not None:
         st.sidebar.success("Trained model loaded")
-        st.caption(f"Model: `{Path(model_path).name}`")
+        st.caption(
+            f"Model file: `{Path(model_path).name}`"
+        )
+
     else:
         st.sidebar.warning("Trained model not found")
         st.warning(
             "DEMO MODE: No trained model was found. "
-            "The visual heuristic is not a validated AI model and "
-            "its predictions are not reliable. Add your trained "
-            "models/parking_mobilenet.keras file for actual inference."
+            "The fallback uses a basic visual heuristic and "
+            "is not reliable for real parking detection. "
+            "Add your trained model at "
+            "models/parking_mobilenet.keras to use AI inference."
         )
 
+    # Image upload.
     uploaded_file = st.file_uploader(
         "Upload a parking image",
         type=["jpg", "jpeg", "png"],
     )
 
     if uploaded_file is None:
-        st.info("Upload a parking-lot image to begin.")
-        st.markdown("### System overview")
+        st.info("Upload a parking image to begin.")
+
+        st.subheader("System overview")
         st.write(
-            "1. Load the image.  \n"
-            "2. Divide the parking area into a grid.  \n"
-            "3. Classify each crop.  \n"
-            "4. Display slot labels and occupancy insights."
+            "1. Upload a parking image.  \n"
+            "2. Divide the image into a grid.  \n"
+            "3. Classify each slot.  \n"
+            "4. Review occupancy metrics and annotated results."
         )
         return
 
     try:
         image = load_image(uploaded_file)
+
     except Exception as exc:
         st.error(f"Could not read image: {exc}")
         return
 
-    st.subheader("Uploaded image")
+    st.subheader("Uploaded parking image")
     st.image(image, use_container_width=True)
 
+    # Generate grid cells or classify the entire image as one crop.
     if mode == "Full parking lot (grid)":
         slots = crop_slots(image, rows, cols)
+
     else:
         slots = [{
             "id": 1,
@@ -316,17 +371,19 @@ def main():
         }]
 
     if not slots:
-        st.error("No valid image regions could be created.")
+        st.error("Could not create valid image regions.")
         return
 
+    # Classify each region.
     results = []
 
-    with st.spinner("Classifying parking slots..."):
+    with st.spinner("Analysing parking slots..."):
         for slot in slots:
             try:
                 if model is not None:
                     label, confidence = predict_slot(
-                        model, slot["crop"]
+                        model,
+                        slot["crop"],
                     )
                 else:
                     label, confidence = demo_prediction(
@@ -341,59 +398,95 @@ def main():
 
             except Exception as exc:
                 st.error(
-                    f"Prediction failed for slot {slot['id']}: {exc}"
+                    f"Prediction failed for slot "
+                    f"{slot['id']}: {exc}"
                 )
                 st.stop()
 
-    insights = build_insights(
-        [item["label"] for item in results]
-    )
-
-    st.divider()
-    st.subheader("Parking insights")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total slots", insights["total"])
-    c2.metric("Occupied", insights["occupied"])
-    c3.metric("Available", insights["available"])
-    c4.metric("Occupancy", f"{insights['occupancy']:.1f}%")
-
-    st.write(f"**Congestion:** {insights['congestion']}")
-    st.info(insights["recommendation"])
-
-    if model is not None:
-        annotated = draw_annotations(image, results)
-        st.subheader("Annotated parking lot")
-        st.image(annotated, use_container_width=True)
-        st.caption("Green = predicted empty · Red = predicted occupied")
-    else:
-        st.subheader("Grid preview — demo heuristic")
-        st.caption(
-            "These labels are illustrative only, not validated predictions."
-        )
-        preview = draw_annotations(image, results)
-        st.image(preview, use_container_width=True)
-
-    table = pd.DataFrame([
-        {
-            "Slot": f"S{item['id']}",
-            "Row": item["row"] + 1,
-            "Column": item["col"] + 1,
-            "Prediction": item["label"].title(),
-            "Confidence": (
-                f"{item['confidence']:.1%}"
-                if model is not None
-                else "Not calibrated"
-            ),
-        }
-        for item in results
+    # Calculate insights.
+    insights = build_insights([
+        result["label"] for result in results
     ])
 
+    st.divider()
+    st.subheader("📊 Parking insights")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Total slots",
+        insights["total"],
+    )
+
+    col2.metric(
+        "Occupied",
+        insights["occupied"],
+    )
+
+    col3.metric(
+        "Available",
+        insights["available"],
+    )
+
+    col4.metric(
+        "Occupancy",
+        f"{insights['occupancy']:.1f}%",
+    )
+
+    st.write(
+        f"**Congestion level:** {insights['congestion']}"
+    )
+
+    st.info(insights["recommendation"])
+
+    # Annotate parking image.
+    annotated_image = draw_annotations(
+        image,
+        results,
+    )
+
+    st.subheader("🅿️ Annotated parking image")
+
+    st.image(
+        annotated_image,
+        use_container_width=True,
+    )
+
+    st.caption(
+        "Green = predicted empty | Red = predicted occupied"
+    )
+
+    # Detailed table.
+    table_data = []
+
+    for result in results:
+        if result["confidence"] is None:
+            confidence_text = "Not calibrated"
+        else:
+            confidence_text = (
+                f"{result['confidence']:.1%}"
+            )
+
+        table_data.append({
+            "Slot": f"S{result['id']}",
+            "Row": result["row"] + 1,
+            "Column": result["col"] + 1,
+            "Prediction": result["label"].title(),
+            "Confidence": confidence_text,
+        })
+
     st.subheader("Slot-by-slot results")
+
     st.dataframe(
-        table,
+        pd.DataFrame(table_data),
         hide_index=True,
         use_container_width=True,
+    )
+
+    st.caption(
+        "Predictions depend on image quality, grid alignment, "
+        "training data, and model accuracy. Verify results "
+        "before using them for real parking decisions."
     )
 
 
