@@ -46,7 +46,13 @@ YOLO fits irregular layouts. Painted campus/mall bays work as a grid, which is l
 | --- | --- |
 | Problem | Smart-city parking occupancy from camera images |
 | Layout | Fixed painted slots (grid). Irregular lots need YOLO / polygon maps |
-| Model | MobileNetV2 transfer learning, 224×224 slot crops |
+st.markdown("""
+| Model | Details |
+|---|---|
+| Model | MobileNetV2 transfer learning |
+| Input size | 224 × 224 slot crops |
+""")
+
 | Split | 70% train / 15% validation / 15% test |
 | Insights | Occupancy % → Low (<40%) / Moderate (40–75%) / High (>75%) |
             """
