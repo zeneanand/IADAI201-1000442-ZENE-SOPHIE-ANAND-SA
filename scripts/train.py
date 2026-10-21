@@ -1,8 +1,4 @@
-"""Train the occupancy classifier (sklearn MLP fallback that runs on any CPU).
-For MobileNetV2 transfer learning (assignment-preferred), use:
-    python scripts/train_mobilenet.py
-on a machine where TensorFlow imports successfully (Colab / Streamlit Cloud).
-"""
+
 from __future__ import annotations
 import argparse
 import json
