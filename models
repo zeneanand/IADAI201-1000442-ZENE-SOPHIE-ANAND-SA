@@ -1,1 +1,0 @@
-model.save("/content/parkvision_model.keras")
