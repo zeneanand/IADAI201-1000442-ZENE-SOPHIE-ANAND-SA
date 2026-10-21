@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.pytest_cache/
+*.zip
+# Training artifacts
+logs/
+runs/
+*.h5
+*.pt
+*.onnx
+!models/parking_mobilenet.keras
+!models/parking_mlp.joblib
+# Notebooks checkpoints
+.ipynb_checkpoints/
