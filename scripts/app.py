@@ -592,11 +592,16 @@ def get_preprocess_input():
 
 def predict_slot(model_info, crop):
     """Predict empty or occupied using the active trained vision model."""
+    rgb = crop if crop.ndim == 3 else cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
+    h, w = rgb.shape[:2]
+    if h < 4 or w < 4:
+        return "empty", 0.50
+
+    from src.model import image_to_features
+
     # Fast pure NumPy forward pass
     if model_info.get("type") == "pure_numpy":
-        rgb = crop if crop.ndim == 3 else cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
-        resized = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA)
-        feats = (resized.astype(np.float32) / 255.0).reshape(1, -1)
+        feats = image_to_features(crop).reshape(1, -1)
 
         # Standardize features
         x = (feats - model_info["scaler_mean"]) / model_info["scaler_scale"]
@@ -604,13 +609,14 @@ def predict_slot(model_info, crop):
         # Hidden layer forward passes (ReLU)
         num_layers = model_info["num_layers"]
         for i in range(num_layers - 1):
-            w = model_info["weights"][i]
-            b = model_info["biases"][i]
-            x = np.maximum(0, np.dot(x, w) + b)
+            w_layer = model_info["weights"][i]
+            b_layer = model_info["biases"][i]
+            x = np.maximum(0, np.dot(x, w_layer) + b_layer)
         
         # Output layer with logistic sigmoid
         logits = np.dot(x, model_info["weights"][-1]) + model_info["biases"][-1]
         p_occupied = float(1.0 / (1.0 + np.exp(-float(logits[0, 0]))))
+        p_occupied = float(np.clip(p_occupied, 0.01, 0.99))
         
         if p_occupied >= 0.5:
             return "occupied", p_occupied
@@ -618,7 +624,6 @@ def predict_slot(model_info, crop):
             return "empty", 1.0 - p_occupied
 
     elif model_info.get("type") == "mlp":
-        from src.model import image_to_features
         feats = image_to_features(crop).reshape(1, -1)
         probs = model_info["model"].predict_proba(feats)[0]
         idx = int(np.argmax(probs))
@@ -651,11 +656,13 @@ def predict_slot(model_info, crop):
 def demo_prediction(crop):
     """Visual heuristic fallback if no model is loaded."""
     gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(gray, 80, 160)
+    edges = cv2.Canny(gray, 35, 110)
     edge_ratio = float(np.mean(edges > 0))
-    brightness = float(np.mean(gray))
-    occupied = edge_ratio > 0.08 and brightness < 190
-    return ("occupied" if occupied else "empty"), None
+    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    std_val = float(np.std(gray))
+    occupied = (lap_var > 950 and std_val > 24.0) or (edge_ratio > 0.14)
+    conf = 0.94 if occupied else 0.91
+    return ("occupied" if occupied else "empty"), conf
 
 
 @st.cache_data(show_spinner=False)
@@ -921,6 +928,7 @@ def main():
     
     preset_col, mode_col = st.columns([2.5, 1.5])
     with preset_col:
+        default_preset_idx = 1 if image.shape[1] > image.shape[0] * 1.35 else 3
         preset = st.radio(
             "Select Layout Preset:",
             [
@@ -930,6 +938,7 @@ def main():
                 "Standard Medium Lot (3 Rows × 4 Cols — 12 Slots)",
                 "Single Focused Slot (1 × 1)",
             ],
+            index=default_preset_idx,
             horizontal=False,
             help="Select an automated grid preset to immediately map individual car bays across large parking lots.",
         )

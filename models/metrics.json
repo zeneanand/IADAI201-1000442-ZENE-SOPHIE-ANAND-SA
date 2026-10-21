@@ -1,11 +1,11 @@
 {
-  "approach": "crop-based classification (sklearn MLP fallback; see train_mobilenet.py)",
+  "approach": "crop-based classification (enhanced multi-feature MLP on 32x32 color + texture/edge stats)",
   "val_accuracy": 1.0,
   "test_accuracy": 1.0,
   "classes": [
     "empty",
     "occupied"
   ],
-  "input_size": 64,
-  "train_samples_with_augmentation": 840
+  "input_features": 3086,
+  "train_samples_with_augmentation": 1320
 }
