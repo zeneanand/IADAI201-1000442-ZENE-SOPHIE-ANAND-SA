@@ -6,7 +6,7 @@ with st.sidebar:
     st.write("Parking Space Detection")
 
 st.markdown("**Input:** parking lot image")
-**Output:** slot-wise Occupied / Empty
+st.markdown("**Output:** slot-wise Occupied / Empty")
 **Approach:** crop-based classification  
 Each slot is cropped from a **fixed grid** and classified as Occupied or Empty.
 **Model:** MobileNetV2 when `models/parking_mobilenet.keras` is present; otherwise the bundled neural-net classifier.
