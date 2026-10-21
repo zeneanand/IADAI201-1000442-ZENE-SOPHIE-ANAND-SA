@@ -18,6 +18,7 @@ runs/
 *.onnx
 !models/parking_mobilenet.keras
 !models/parking_mlp.joblib
+!models/parking_mlp_weights.npz
 # Notebooks checkpoints
 .ipynb_checkpoints/
 data/raw/
