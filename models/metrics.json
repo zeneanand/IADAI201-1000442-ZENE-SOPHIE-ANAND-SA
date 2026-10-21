@@ -1,0 +1,4 @@
+ "classes": ["empty", "occupied"],
+ "train_samples_with_augmentation": 840,
+  "note": "Perfect scores are on synthetic slot crops. Retrain on PKLot for a realistic accuracy number."
+}
