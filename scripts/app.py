@@ -17,6 +17,8 @@ ROOT_DIR = APP_DIR.parent
 MODEL_PATHS = [
     ROOT_DIR / "models" / "parking_mobilenet.keras",
     APP_DIR / "models" / "parking_mobilenet.keras",
+    ROOT_DIR / "models" / "parking_mlp.joblib",
+    APP_DIR / "models" / "parking_mlp.joblib",
 ]
 
 IMAGE_SIZE = (224, 224)
@@ -56,21 +58,45 @@ with st.sidebar:
 
 @st.cache_resource
 def load_model():
-    """Load the trained Keras model if available."""
-    for path in MODEL_PATHS:
+    """Load the trained Keras or scikit-learn model if available."""
+    # 1. Check MobileNet Keras model
+    keras_candidates = [
+        ROOT_DIR / "models" / "parking_mobilenet.keras",
+        APP_DIR / "models" / "parking_mobilenet.keras",
+    ]
+    for path in keras_candidates:
         if path.exists():
             try:
-                from tensorflow.keras.models import load_model
-
-                model = load_model(path, compile=False)
-                return model, str(path)
-
+                from tensorflow.keras.models import load_model as keras_load
+                model = keras_load(path, compile=False)
+                return {
+                    "model": model,
+                    "type": "mobilenet",
+                    "path": str(path),
+                }
             except Exception as exc:
-                raise RuntimeError(
-                    f"Could not load model at {path}: {exc}"
-                ) from exc
+                st.warning(f"Failed loading Keras model: {exc}")
 
-    return None, None
+    # 2. Check Scikit-learn MLP model
+    mlp_candidates = [
+        ROOT_DIR / "models" / "parking_mlp.joblib",
+        APP_DIR / "models" / "parking_mlp.joblib",
+    ]
+    for path in mlp_candidates:
+        if path.exists():
+            try:
+                import joblib
+                payload = joblib.load(path)
+                return {
+                    "model": payload["model"],
+                    "classes": tuple(payload["classes"]),
+                    "type": "mlp",
+                    "path": str(path),
+                }
+            except Exception as exc:
+                st.warning(f"Failed loading MLP model: {exc}")
+
+    return None
 
 
 # --------------------------------------------------
@@ -130,15 +156,21 @@ def get_preprocess_input():
     return _preprocess_input
 
 
-def predict_slot(model, crop):
+def predict_slot(model_info, crop):
     """
-    Predict empty or occupied using the trained model.
+    Predict empty or occupied using whichever trained model is loaded.
+    """
+    if model_info.get("type") == "mlp":
+        from src.model import image_to_features
+        feats = image_to_features(crop).reshape(1, -1)
+        probs = model_info["model"].predict_proba(feats)[0]
+        idx = int(np.argmax(probs))
+        label = model_info["classes"][idx]
+        confidence = float(probs[idx])
+        return label, confidence
 
-    Assumptions:
-    - One output: sigmoid probability of occupied.
-    - Two outputs: [empty, occupied].
-    - Model preprocessing matches MobileNetV2 preprocessing.
-    """
+    # MobileNet path
+    model = model_info["model"]
     resized = cv2.resize(crop, IMAGE_SIZE)
 
     batch = np.expand_dims(
@@ -341,16 +373,18 @@ def main():
 
     # Load trained model, if available.
     try:
-        model, model_path = load_model()
+        model_info = load_model()
 
     except Exception as exc:
         st.error(f"Model loading failed: {exc}")
         st.stop()
 
-    if model is not None:
-        st.sidebar.success("Trained model loaded")
+    if model_info is not None:
+        model_name = Path(model_info["path"]).name
+        model_type_str = "MobileNetV2" if model_info["type"] == "mobilenet" else "Neural Network (MLP)"
+        st.sidebar.success(f"Trained model loaded: {model_type_str}")
         st.caption(
-            f"Model file: `{Path(model_path).name}`"
+            f"Active model: `{model_name}`"
         )
 
     else:
@@ -358,44 +392,65 @@ def main():
         st.warning(
             "DEMO MODE: No trained model was found. "
             "The fallback uses a basic visual heuristic and "
-            "is not reliable for real parking detection. "
-            "Add your trained model at "
-            "models/parking_mobilenet.keras to use AI inference."
+            "is not reliable for real parking detection."
         )
 
-    # Image upload.
-    uploaded_file = st.file_uploader(
-        "Upload a parking image",
-        type=["jpg", "jpeg", "png"],
+    # Image source selector: upload or choose demo lot.
+    samples_dir = ROOT_DIR / "data" / "samples"
+    sample_options = ["Upload my own image"]
+    sample_map = {}
+    if samples_dir.exists():
+        for sample_file in sorted(samples_dir.glob("*.jpg")):
+            name = sample_file.stem.replace("_", " ").title()
+            sample_options.append(name)
+            sample_map[name] = sample_file
+
+    selected_source = st.selectbox(
+        "Select image source:",
+        sample_options,
     )
 
-    if uploaded_file is None:
-        st.info("Upload a parking image to begin.")
+    image = None
+    if selected_source == "Upload my own image":
+        uploaded_file = st.file_uploader(
+            "Upload a parking image",
+            type=["jpg", "jpeg", "png"],
+        )
+        if uploaded_file is not None:
+            try:
+                image = load_image(uploaded_file)
+            except Exception as exc:
+                st.error(f"Could not read image: {exc}")
+                return
+    else:
+        sample_path = sample_map[selected_source]
+        try:
+            image = np.array(Image.open(sample_path).convert("RGB"))
+            st.info(f"Loaded demo lot: **{selected_source}**")
+        except Exception as exc:
+            st.error(f"Could not load sample: {exc}")
+            return
+
+    if image is None:
+        st.info("Upload a parking image or select a demo lot above to begin.")
 
         st.subheader("System overview")
         st.write(
-            "1. Upload a parking image.  \n"
+            "1. Upload or select a demo parking image.  \n"
             "2. Divide the image into a grid.  \n"
             "3. Classify each slot.  \n"
             "4. Review occupancy metrics and annotated results."
         )
         return
 
-    try:
-        image = load_image(uploaded_file)
-
-    except Exception as exc:
-        st.error(f"Could not read image: {exc}")
-        return
-
-    st.subheader("Uploaded parking image")
+    st.subheader("Parking image")
     st.image(image, use_container_width=True)
 
     # Generate and classify grid cells (cached to prevent CPU spikes on UI reruns).
     results = []
     with st.spinner("Analysing parking slots..."):
         try:
-            results = classify_slots(model, image, mode, rows, cols)
+            results = classify_slots(model_info, image, mode, rows, cols)
         except Exception as exc:
             st.error(f"Analysis failed: {exc}")
             st.stop()

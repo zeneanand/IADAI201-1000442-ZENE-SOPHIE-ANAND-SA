@@ -1,5 +1,11 @@
 {
-  "classes": ["empty", "occupied"],
-  "train_samples_with_augmentation": 840,
-  "note": "Perfect scores are on synthetic slot crops. Retrain on PKLot for a realistic accuracy number."
+  "approach": "crop-based classification (sklearn MLP fallback; see train_mobilenet.py)",
+  "val_accuracy": 1.0,
+  "test_accuracy": 1.0,
+  "classes": [
+    "empty",
+    "occupied"
+  ],
+  "input_size": 64,
+  "train_samples_with_augmentation": 840
 }

@@ -20,3 +20,5 @@ runs/
 !models/parking_mlp.joblib
 # Notebooks checkpoints
 .ipynb_checkpoints/
+data/raw/
+data/splits/
