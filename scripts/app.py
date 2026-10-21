@@ -54,8 +54,13 @@ st.markdown("""
 """)
 
 | Split | 70% train / 15% validation / 15% test |
-| Insights | Occupancy % → Low (<40%) / Moderate (40–75%) / High (>75%) |
-            """
+st.markdown("""
+**Parking Insights**
+
+- Low congestion: occupancy below 40%
+- Moderate congestion: occupancy from 40% to 75%
+- High congestion: occupancy above 75%
+""")            """
         )
         return
     if mode.startswith("Full"):
