@@ -615,48 +615,56 @@ def build_insights(labels):
 # --------------------------------------------------
 
 def draw_annotations(image, slots):
-    """Draw high-visibility green boxes for empty and red boxes for occupied."""
+    """Draw high-visibility green boxes for empty and red boxes for occupied with adaptive scaling."""
     annotated = image.copy()
+    overlay = annotated.copy()
 
     for slot in slots:
-        if slot["label"] == "occupied":
-            color = (239, 68, 68)  # Red
-        else:
-            color = (34, 197, 94)  # Emerald green
+        x1, y1, x2, y2 = slot["x1"], slot["y1"], slot["x2"], slot["y2"]
+        bw = x2 - x1
+        is_occ = (slot["label"] == "occupied")
+        
+        # Color (BGR for OpenCV)
+        color = (239, 68, 68) if is_occ else (34, 197, 94)
 
-        cv2.rectangle(
-            annotated,
-            (slot["x1"], slot["y1"]),
-            (slot["x2"], slot["y2"]),
-            color,
-            3,
-        )
+        # Subtle semi-transparent tint inside bay
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
 
-        text = f"S{slot['id']}: {slot['label'].upper()}"
-        text_y = min(slot["y1"] + 24, image.shape[0] - 6)
+        # Border thickness adapts to slot width
+        border_thick = 2 if bw > 50 else 1
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, border_thick)
 
-        # High-contrast background border
-        cv2.putText(
-            annotated,
-            text,
-            (slot["x1"] + 6, text_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 0, 0),
-            3,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            annotated,
-            text,
-            (slot["x1"] + 6, text_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
+        # Adaptive text label size
+        scale = max(0.28, min(0.48, bw / 110.0))
+        label_text = f"S{slot['id']}:" + ("OCC" if bw < 65 else "OCCUPIED" if is_occ else "EMPTY")
+        if not is_occ and bw < 65:
+            label_text = f"S{slot['id']}:EMP"
+        
+        text_y = min(y1 + int(14 * (scale / 0.35)), y2 - 4)
+        if text_y > y1:
+            cv2.putText(
+                annotated,
+                label_text,
+                (x1 + 3, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                scale,
+                (0, 0, 0),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                annotated,
+                label_text,
+                (x1 + 3, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                scale,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
 
+    # Blend subtle overlay (15% tint)
+    cv2.addWeighted(overlay, 0.15, annotated, 0.85, 0, annotated)
     return annotated
 
 # --------------------------------------------------
@@ -793,24 +801,61 @@ def main():
     st.markdown(
         """
         <div class="park-glass-card" style="padding: 16px 22px; margin-bottom: 20px;">
-            <div style="font-size: 0.95rem; font-weight: 700; color: #38bdf8; margin-bottom: 10px;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px;">
                 📐 Parking Bay Grid & Segmentation Controls
+            </div>
+            <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 12px;">
+                Choose an aligned preset for your facility, or fine-tune rows and columns so every car gets its own individual slot box.
             </div>
         """,
         unsafe_allow_html=True,
     )
-    c_mode, c_rows, c_cols = st.columns([1.5, 1.5, 1.5])
-    with c_mode:
-        mode = st.radio(
-            "Detection Mode",
-            ["Full parking lot (grid)", "Single slot crop"],
-            horizontal=True,
-            help="Full parking lot divides image into a bay grid. Single slot classifies the entire photo as one crop.",
+    
+    preset_col, mode_col = st.columns([2.5, 1.5])
+    with preset_col:
+        preset = st.radio(
+            "Select Layout Preset:",
+            [
+                "Custom Manual Grid",
+                "Aerial Multi-Bay Lot (6 Rows × 10 Cols — 60 Slots)",
+                "Dense Full Facility (8 Rows × 12 Cols — 96 Slots)",
+                "Standard Medium Lot (3 Rows × 4 Cols — 12 Slots)",
+                "Single Focused Slot (1 × 1)",
+            ],
+            horizontal=False,
+            help="Select an automated grid preset to immediately map individual car bays across large parking lots.",
         )
+    with mode_col:
+        mode = "Single slot crop" if "Single" in preset else "Full parking lot (grid)"
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; margin-top: 15px;">
+                <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase;">Detection Mode:</div>
+                <div style="font-size: 0.95rem; font-weight: 700; color: #38bdf8; margin-top: 2px;">{mode}</div>
+                <div style="font-size: 0.72rem; color: #64748b; margin-top: 4px;">Maps individual car bays across monitored zones.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Determine default rows and cols based on preset
+    if "6 Rows × 10 Cols" in preset:
+        def_rows, def_cols = 6, 10
+    elif "8 Rows × 12 Cols" in preset:
+        def_rows, def_cols = 8, 12
+    elif "Single" in preset:
+        def_rows, def_cols = 1, 1
+    elif "Standard" in preset:
+        def_rows, def_cols = 3, 4
+    else:
+        def_rows = 6 if image.shape[1] > image.shape[0] * 1.4 else 3
+        def_cols = 10 if image.shape[1] > image.shape[0] * 1.4 else 4
+
+    c_rows, c_cols = st.columns(2)
     with c_rows:
-        rows = st.slider("Grid Rows", 1, 8, 3 if "Cloudy" not in selected_source else 4)
+        rows = st.slider("Vertical Bay Rows (Slots)", 1, 20, def_rows, help="Increase rows so each car bay receives its own slot.")
     with c_cols:
-        cols = st.slider("Grid Columns", 1, 10, 4 if "Sunny" not in selected_source else 5)
+        cols = st.slider("Horizontal Bay Columns (Slots)", 1, 24, def_cols, help="Increase columns to match the bays across the lot.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Process and classify grid cells (Cached)
@@ -979,12 +1024,7 @@ def main():
                 css_cls = "slot-occupied" if is_occ else "slot-empty"
                 icon = "🔴" if is_occ else "🟢"
                 conf_str = f"{r['confidence']:.0%}" if r["confidence"] is not None else "Est"
-                chips_html += f"""
-                <div class="slot-chip {css_cls}">
-                    <span>{icon} <b>S{r['id']}</b> (R{r['row']+1}:C{r['col']+1})</span>
-                    <span style="opacity:0.85;">{conf_str}</span>
-                </div>
-                """
+                chips_html += f'<div class="slot-chip {css_cls}"><span>{icon} <b>S{r["id"]}</b> (R{r["row"]+1}:C{r["col"]+1})</span><span style="opacity:0.85;">{conf_str}</span></div>'
         chips_html += '</div></div>'
         st.markdown(chips_html, unsafe_allow_html=True)
 
