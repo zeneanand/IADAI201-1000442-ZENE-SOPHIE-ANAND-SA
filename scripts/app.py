@@ -5,7 +5,7 @@ with st.sidebar:
     st.title("ParkVision")
     st.write("Parking Space Detection")
 
-**Input:** parking lot image  
+st.markdown("**Input:** parking lot image")
 **Output:** slot-wise Occupied / Empty
 **Approach:** crop-based classification  
 Each slot is cropped from a **fixed grid** and classified as Occupied or Empty.
