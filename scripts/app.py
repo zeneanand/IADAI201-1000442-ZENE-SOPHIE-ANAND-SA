@@ -31,33 +31,122 @@ st.set_page_config(
 )
 
 # --------------------------------------------------
-# SOUND SYNTHESIZER (Two Distinct Audio Alarms)
+# SOUND SYNTHESIZER & SHAKING BELL ALERT
 # --------------------------------------------------
 
 @st.cache_data
-def generate_critical_siren_b64() -> str:
-    """Alarm 1: Urgent pulsing hazard siren for High Congestion / Error states."""
-    sample_rate = 22050
-    duration = 0.55
+def generate_irritating_alarm_b64(duration: float = 3.3) -> str:
+    """Irritating high-frequency alternating strobe buzzer alarm (3.3 seconds)."""
+    sample_rate = 11025
     num_samples = int(sample_rate * duration)
     raw = bytearray()
-    
     for i in range(num_samples):
         t = i / sample_rate
-        # Alternating high-urgency frequencies (880 Hz and 587 Hz)
-        f = 880.0 if (int(t * 7) % 2 == 0) else 587.33
-        envelope = 1.0 - 0.2 * (t / duration)
-        sample = int(32767.0 * 0.45 * envelope * math.sin(2.0 * math.pi * f * t))
-        sample = max(-32768, min(32767, sample))
-        raw.extend(struct.pack("<h", sample))
-    
-    header = bytearray(b"RIFF")
-    header.extend(struct.pack("<I", 36 + len(raw)))
-    header.extend(b"WAVEfmt ")
-    header.extend(struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16))
-    header.extend(b"data")
-    header.extend(struct.pack("<I", len(raw)))
+        # Rapid dissonant frequency modulation (1280 Hz and 860 Hz)
+        f = 1280.0 if (int(t * 8.5) % 2 == 0) else 860.0
+        sample1 = math.sin(2.0 * math.pi * f * t)
+        sample2 = 0.55 * math.sin(2.0 * math.pi * f * 1.414 * t)
+        val = (sample1 + sample2) / 1.55
+        if t > duration - 0.25:
+            val *= (duration - t) / 0.25
+        s = int(32767.0 * 0.55 * val)
+        s = max(-32768, min(32767, s))
+        raw.extend(struct.pack("<h", s))
+    header = bytearray(b"RIFF") + struct.pack("<I", 36 + len(raw)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16) + b"data" + struct.pack("<I", len(raw))
     return base64.b64encode(header + raw).decode("ascii")
+
+
+def trigger_shaking_bell_alert():
+    """Display a centered violently shaking bell overlay with an irritating alarm for 3.5 seconds, then remove it."""
+    b64_sound = generate_irritating_alarm_b64(3.3)
+    alert_html = f"""
+    <div id="shaking-bell-overlay" style="
+        position: fixed;
+        top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(3, 7, 18, 0.78);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        z-index: 99999999;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        animation: overlayFadeIn 0.2s ease-out;
+        pointer-events: none;
+    ">
+        <div style="
+            background: rgba(15, 23, 42, 0.96);
+            border: 2.5px solid #ef4444;
+            box-shadow: 0 0 60px rgba(239, 68, 68, 0.85), 0 0 120px rgba(239, 68, 68, 0.45);
+            border-radius: 24px;
+            padding: 35px 55px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            max-width: 480px;
+        ">
+            <div style="
+                font-size: 5.5rem;
+                line-height: 1;
+                display: inline-block;
+                animation: bellShakeAnim 0.30s infinite ease-in-out;
+                transform-origin: top center;
+                filter: drop-shadow(0 0 25px #ef4444);
+            ">
+                🔔
+            </div>
+            <div style="font-size: 1.55rem; font-weight: 900; color: #f87171; letter-spacing: 1px; text-transform: uppercase;">
+                🚨 CRITICAL FACILITY ALERT!
+            </div>
+            <div style="font-size: 0.95rem; color: #cbd5e1; font-weight: 500;">
+                High congestion detected. Maximum capacity threshold exceeded!
+            </div>
+        </div>
+    </div>
+    <audio autoplay style="display:none;">
+        <source src="data:audio/wav;base64,{b64_sound}" type="audio/wav">
+    </audio>
+    <script>
+    try {{
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const duration = 3.3;
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        for (let i = 0; i < 28; i++) {{
+            const t = now + i * 0.118;
+            osc.frequency.setValueAtTime(i % 2 === 0 ? 1280 : 860, t);
+        }}
+        gain.gain.setValueAtTime(0.45, now);
+        gain.gain.setValueAtTime(0.45, now + duration - 0.25);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + duration);
+    }} catch(e) {{}}
+
+    // Auto-remove shaking bell after 3.5 seconds
+    setTimeout(() => {{
+        const el = document.getElementById("shaking-bell-overlay");
+        if (el) {{
+            el.style.transition = "opacity 0.4s ease, transform 0.4s ease";
+            el.style.opacity = "0";
+            el.style.transform = "scale(0.85)";
+            setTimeout(() => el.remove(), 400);
+        }}
+    }}, 3500);
+    </script>
+    """
+    st.components.v1.html(alert_html, height=0, width=0)
+
+
+@st.cache_data
+def generate_critical_siren_b64() -> str:
+    """Alarm 1: Urgent pulsing hazard siren."""
+    return generate_irritating_alarm_b64(3.3)
 
 
 @st.cache_data
@@ -252,6 +341,25 @@ CUSTOM_CSS = """
     0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
     70% { box-shadow: 0 0 0 16px rgba(239, 68, 68, 0); }
     100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+@keyframes bellShakeAnim {
+    0% { transform: rotate(0deg) scale(1); }
+    10% { transform: rotate(-28deg) scale(1.15); }
+    20% { transform: rotate(28deg) scale(1.2); }
+    30% { transform: rotate(-24deg) scale(1.15); }
+    40% { transform: rotate(24deg) scale(1.2); }
+    50% { transform: rotate(-18deg) scale(1.1); }
+    60% { transform: rotate(18deg) scale(1.1); }
+    70% { transform: rotate(-12deg) scale(1.05); }
+    80% { transform: rotate(12deg) scale(1.05); }
+    90% { transform: rotate(-5deg) scale(1); }
+    100% { transform: rotate(0deg) scale(1); }
+}
+
+@keyframes overlayFadeIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
 }
 
 .alert-banner-high {
@@ -735,9 +843,9 @@ def main():
     )
     col_t1, col_t2, col_spacer = st.columns([1.5, 1.5, 3])
     with col_t1:
-        if st.button("🚨 Test Hazard Alarm", help="Plays the urgent siren for high congestion / errors"):
-            trigger_audio("critical")
-            st.toast("🚨 Playing Hazard Siren Alarm!", icon="🚨")
+        if st.button("🚨 Test Hazard Alarm", help="Triggers centered shaking bell & piercing alert for 3.5s"):
+            trigger_shaking_bell_alert()
+            st.toast("🚨 Playing Hazard Siren & Shaking Bell Alert!", icon="🚨")
     with col_t2:
         if st.button("🔔 Test Vacancy Chime", help="Plays the ascending chime when parking slots are available"):
             trigger_audio("available")
@@ -877,7 +985,7 @@ def main():
 
     # Dynamic Pop-Up Toasts & Automated Audio Alarms
     if insights["congestion"] == "High":
-        trigger_audio("critical")
+        trigger_shaking_bell_alert()
         st.toast(
             f"🚨 CRITICAL ALERT: Facility at {insights['occupancy']:.1f}% capacity! Rerouting incoming vehicles.",
             icon="🚨",
@@ -894,7 +1002,6 @@ def main():
             f"✅ OPTIMAL CLEARANCE: {insights['available']} vacant bays detected! Instant entry confirmed.",
             icon="🟢",
         )
-        st.balloons()
 
     # Congestion Status Banner
     if insights["congestion"] == "High":
