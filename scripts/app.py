@@ -666,12 +666,7 @@ def predict_slot(model_info, crop):
         return ("occupied" if is_occ else "empty"), 0.98
 
     # Real-world parking lot detection:
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 4)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    car_area = sum(cv2.contourArea(c) for c in contours if cv2.contourArea(c) > (h * w * 0.025))
-    contour_ratio = car_area / float(h * w)
-
-    is_empty_asphalt = (lap_var < 750 and std_val < 22.0 and contour_ratio < 0.05) or (lap_var < 700 and edge_ratio < 0.16)
+    is_empty_asphalt = (lap_var < 720 and std_val < 21.0) or (edge_ratio < 0.12 and lap_var < 750) or (std_val < 16.5)
 
     # If neural model is available, evaluate forward pass
     if model_info is not None and model_info.get("type") == "pure_numpy":
@@ -972,8 +967,8 @@ def main():
             "Select Layout Preset:",
             [
                 "Custom Manual Grid",
-                "Aerial Multi-Bay Lot (6 Rows × 10 Cols — 60 Slots)",
-                "Dense Full Facility (8 Rows × 12 Cols — 96 Slots)",
+                "Car-by-Car Individual Stalls (6 Rows × 20 Cols — 120 Stalls)",
+                "Aerial Monitored Lot (6 Rows × 10 Cols — 60 Slots)",
                 "Standard Medium Lot (3 Rows × 4 Cols — 12 Slots)",
                 "Single Focused Slot (1 × 1)",
             ],
@@ -995,23 +990,23 @@ def main():
         )
 
     # Determine default rows and cols based on preset
-    if "6 Rows × 10 Cols" in preset:
+    if "6 Rows × 20 Cols" in preset:
+        def_rows, def_cols = 6, 20
+    elif "6 Rows × 10 Cols" in preset:
         def_rows, def_cols = 6, 10
-    elif "8 Rows × 12 Cols" in preset:
-        def_rows, def_cols = 8, 12
     elif "Single" in preset:
         def_rows, def_cols = 1, 1
     elif "Standard" in preset:
         def_rows, def_cols = 3, 4
     else:
         def_rows = 6 if image.shape[1] > image.shape[0] * 1.4 else 3
-        def_cols = 10 if image.shape[1] > image.shape[0] * 1.4 else 4
+        def_cols = 20 if image.shape[1] > image.shape[0] * 1.4 else 4
 
     c_rows, c_cols = st.columns(2)
     with c_rows:
-        rows = st.slider("Vertical Bay Rows (Slots)", 1, 20, def_rows, help="Increase rows so each car bay receives its own slot.")
+        rows = st.slider("Vertical Bay Rows (Slots)", 1, 25, def_rows, help="Increase rows so each car bay receives its own slot.")
     with c_cols:
-        cols = st.slider("Horizontal Bay Columns (Slots)", 1, 24, def_cols, help="Increase columns to match the bays across the lot.")
+        cols = st.slider("Horizontal Bay Columns (Slots)", 1, 30, def_cols, help="Increase columns to match each car stall by stall.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Process and classify grid cells (Cached)
