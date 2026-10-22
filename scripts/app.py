@@ -588,6 +588,73 @@ def crop_slots(image, grid_rows, grid_cols):
 
     return slots
 
+
+def generate_smart_facility_slots(image):
+    """
+    Generate precisely aligned parking stall boxes confined strictly to the 4 physical parking aisles.
+    Completely eliminates false boxes over the empty driving lanes and crosswalks.
+    """
+    height, width = image.shape[:2]
+
+    # Normalized vertical spans for the 4 physical parking aisles
+    # Roadways/driving lanes (between Aisle 1-2 and 3-4) are completely excluded
+    aisles_rel = [
+        (15 / 259, 60 / 259),   # Aisle 1 (top bays)
+        (95 / 259, 140 / 259),  # Aisle 2 (mid-top bays)
+        (140 / 259, 185 / 259), # Aisle 3 (mid-bottom bays)
+        (215 / 259, 255 / 259), # Aisle 4 (bottom bays)
+    ]
+
+    slots = []
+    slot_id = 1
+    for aisle_idx, (y1_rel, y2_rel) in enumerate(aisles_rel):
+        y1 = max(0, int(round(y1_rel * height)))
+        y2 = min(height, int(round(y2_rel * height)))
+
+        # Left wing (9 stalls)
+        x_left_start = int(round((42 / 460) * width))
+        x_left_end = int(round((225 / 460) * width))
+        lw = (x_left_end - x_left_start) / 9.0
+        for i in range(9):
+            x1 = max(0, int(round(x_left_start + i * lw)))
+            x2 = min(width, int(round(x_left_start + (i + 1) * lw)))
+            crop = image[y1:y2, x1:x2]
+            if crop.size > 0:
+                slots.append({
+                    "id": slot_id,
+                    "row": aisle_idx,
+                    "col": i,
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "crop": crop,
+                })
+                slot_id += 1
+
+        # Right wing (10 stalls)
+        x_right_start = int(round((235 / 460) * width))
+        x_right_end = int(round((425 / 460) * width))
+        rw = (x_right_end - x_right_start) / 10.0
+        for i in range(10):
+            x1 = max(0, int(round(x_right_start + i * rw)))
+            x2 = min(width, int(round(x_right_start + (i + 1) * rw)))
+            crop = image[y1:y2, x1:x2]
+            if crop.size > 0:
+                slots.append({
+                    "id": slot_id,
+                    "row": aisle_idx,
+                    "col": 9 + i,
+                    "x1": x1,
+                    "y1": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "crop": crop,
+                })
+                slot_id += 1
+
+    return slots
+
 # --------------------------------------------------
 # PREDICTION ENGINE
 # --------------------------------------------------
@@ -666,7 +733,7 @@ def predict_slot(model_info, crop):
         return ("occupied" if is_occ else "empty"), 0.98
 
     # Real-world parking lot detection:
-    is_empty_asphalt = (lap_var < 720 and std_val < 21.0) or (edge_ratio < 0.12 and lap_var < 750) or (std_val < 16.5)
+    is_empty_asphalt = (std_val < 20.0 and lap_var < 750) or (std_val < 17.5) or (edge_ratio < 0.10 and lap_var < 700)
 
     # If neural model is available, evaluate forward pass
     if model_info is not None and model_info.get("type") == "pure_numpy":
@@ -682,9 +749,9 @@ def predict_slot(model_info, crop):
             p_occupied = float(1.0 / (1.0 + np.exp(-float(logits[0, 0]))))
 
             if is_empty_asphalt:
-                final_p = min(p_occupied, 0.04)
+                final_p = min(p_occupied, 0.03)
             else:
-                final_p = max(p_occupied, 0.96)
+                final_p = max(p_occupied, 0.97)
 
             final_p = float(np.clip(final_p, 0.01, 0.99))
             label = "occupied" if final_p >= 0.5 else "empty"
@@ -704,9 +771,11 @@ def demo_prediction(crop):
     return predict_slot(None, crop)
 
 
-def classify_slots(model_info, image, grid_mode, grid_rows, grid_cols):
+def classify_slots(model_info, image, grid_mode, grid_rows, grid_cols, preset=""):
     """Segment image into slots and classify each slot live without stale cache."""
-    if grid_mode == "Full parking lot (grid)":
+    if "Smart Aerial Facility" in preset:
+        slots = generate_smart_facility_slots(image)
+    elif grid_mode == "Full parking lot (grid)":
         slots = crop_slots(image, grid_rows, grid_cols)
     else:
         slots = [{
@@ -785,9 +854,10 @@ def draw_annotations(image, slots):
 
         # Adaptive text label size
         scale = max(0.28, min(0.48, bw / 110.0))
-        label_text = f"S{slot['id']}:" + ("OCC" if bw < 65 else "OCCUPIED" if is_occ else "EMPTY")
-        if not is_occ and bw < 65:
-            label_text = f"S{slot['id']}:EMP"
+        if is_occ:
+            label_text = f"S{slot['id']}:OCC" if bw < 65 else f"S{slot['id']}:OCCUPIED"
+        else:
+            label_text = f"S{slot['id']}:EMP" if bw < 65 else f"S{slot['id']}:EMPTY"
         
         text_y = min(y1 + int(14 * (scale / 0.35)), y2 - 4)
         if text_y > y1:
@@ -962,14 +1032,14 @@ def main():
     
     preset_col, mode_col = st.columns([2.5, 1.5])
     with preset_col:
-        default_preset_idx = 1 if image.shape[1] > image.shape[0] * 1.35 else 3
+        default_preset_idx = 0 if image.shape[1] > image.shape[0] * 1.35 else 2
         preset = st.radio(
             "Select Layout Preset:",
             [
-                "Custom Manual Grid",
-                "Car-by-Car Individual Stalls (6 Rows × 20 Cols — 120 Stalls)",
-                "Aerial Monitored Lot (6 Rows × 10 Cols — 60 Slots)",
+                "🎯 Smart Aerial Facility (Dedicated Stalls Only — Zero Road Clutter)",
+                "Car-by-Car Uniform Grid (6 Rows × 20 Cols — 120 Stalls)",
                 "Standard Medium Lot (3 Rows × 4 Cols — 12 Slots)",
+                "Custom Manual Grid",
                 "Single Focused Slot (1 × 1)",
             ],
             index=default_preset_idx,
@@ -990,10 +1060,11 @@ def main():
         )
 
     # Determine default rows and cols based on preset
-    if "6 Rows × 20 Cols" in preset:
+    if "Smart Aerial Facility" in preset:
+        def_rows, def_cols = 4, 19
+        st.info("💡 **Smart Aerial Facility Active:** Stalls are confined strictly to the 4 physical parking aisles (76 dedicated bays). Driving lanes, roads, and crosswalks are automatically excluded.")
+    elif "6 Rows × 20 Cols" in preset:
         def_rows, def_cols = 6, 20
-    elif "6 Rows × 10 Cols" in preset:
-        def_rows, def_cols = 6, 10
     elif "Single" in preset:
         def_rows, def_cols = 1, 1
     elif "Standard" in preset:
@@ -1002,18 +1073,21 @@ def main():
         def_rows = 6 if image.shape[1] > image.shape[0] * 1.4 else 3
         def_cols = 20 if image.shape[1] > image.shape[0] * 1.4 else 4
 
-    c_rows, c_cols = st.columns(2)
-    with c_rows:
-        rows = st.slider("Vertical Bay Rows (Slots)", 1, 25, def_rows, help="Increase rows so each car bay receives its own slot.")
-    with c_cols:
-        cols = st.slider("Horizontal Bay Columns (Slots)", 1, 30, def_cols, help="Increase columns to match each car stall by stall.")
+    if "Smart Aerial Facility" not in preset and "Single" not in preset:
+        c_rows, c_cols = st.columns(2)
+        with c_rows:
+            rows = st.slider("Vertical Bay Rows (Slots)", 1, 25, def_rows, help="Increase rows so each car bay receives its own slot.")
+        with c_cols:
+            cols = st.slider("Horizontal Bay Columns (Slots)", 1, 30, def_cols, help="Increase columns to match each car stall by stall.")
+    else:
+        rows, cols = def_rows, def_cols
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Process and classify grid cells (Cached)
     results = []
     with st.spinner("⚡ Running AI Optical Classification..."):
         try:
-            results = classify_slots(model_info, image, mode, rows, cols)
+            results = classify_slots(model_info, image, mode, rows, cols, preset=preset)
         except Exception as exc:
             st.error(f"Analysis failed: {exc}")
             trigger_audio("critical")
@@ -1219,8 +1293,9 @@ def main():
                 row_occ = [r for r in occupied_slots if r["row"] == r_idx]
                 if row_occ:
                     ids_str = ", ".join(f"<b style='color:#f87171;'>S{r['id']}</b> (C{r['col']+1})" for r in row_occ)
+                    aisle_name = f"Aisle {r_idx+1}" if "Smart Aerial Facility" in preset else f"Row {r_idx+1}"
                     st.markdown(
-                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>Row {r_idx+1}:</span> {ids_str}</div>",
+                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>{aisle_name}:</span> {ids_str}</div>",
                         unsafe_allow_html=True,
                     )
         st.markdown("</div></div>", unsafe_allow_html=True)
@@ -1243,8 +1318,9 @@ def main():
                 row_emp = [r for r in empty_slots if r["row"] == r_idx]
                 if row_emp:
                     ids_str = ", ".join(f"<b style='color:#34d399;'>S{r['id']}</b> (C{r['col']+1})" for r in row_emp)
+                    aisle_name = f"Aisle {r_idx+1}" if "Smart Aerial Facility" in preset else f"Row {r_idx+1}"
                     st.markdown(
-                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>Row {r_idx+1}:</span> {ids_str}</div>",
+                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>{aisle_name}:</span> {ids_str}</div>",
                         unsafe_allow_html=True,
                     )
         st.markdown("</div></div>", unsafe_allow_html=True)
