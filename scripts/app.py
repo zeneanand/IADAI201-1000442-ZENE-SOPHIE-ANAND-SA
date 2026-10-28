@@ -22,17 +22,18 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parent
+# Robust path resolution: checks both next to app.py and one level up (repo root)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = _SCRIPT_DIR if (_SCRIPT_DIR / "samples").exists() else _SCRIPT_DIR.parent
 SAMPLES = ROOT / "samples"
 MODELS = ROOT / "models"
-
 
 # RGB colours required by the brief: green empty, red occupied.
 EMPTY_RGB = (34, 197, 94)
 OCCUPIED_RGB = (239, 68, 68)
 
-_EMPTY_HINTS = ("empty", "free", "vacant", "available", "0")
-_OCCUPIED_HINTS = ("occupied", "busy", "taken", "full", "car", "vehicle", "1")
+_EMPTY_HINTS = ("empty", "free", "vacant", "available")
+_OCCUPIED_HINTS = ("occupied", "busy", "taken", "full", "car")
 
 
 @dataclass(frozen=True)
@@ -40,14 +41,19 @@ class Slot:
     status: str
     confidence: float
     xyxy: tuple[int, int, int, int]
-    # Four corners [(x1,y1), (x2,y2), (x3,y3), (x4,y4)] when the bay is slanted
-    # or extracted via OBB. If None, drawn from xyxy.
+    # Four corners when the bay is slanted. Straight bays leave this empty
+    # and are drawn from xyxy.
     quad: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
 
 
 def slot_status(class_name: str) -> str:
-    """Map a detector class name to ``empty`` or ``occupied``."""
-    name = class_name.lower().replace("_", " ").replace("-", " ").strip()
+    """Map a detector class name to ``empty`` or ``occupied``.
+
+    PKLot exports use names such as ``empty`` / ``occupied`` or
+    ``space-empty`` / ``space-occupied``. Empty is checked first so a name
+    that somehow contains both tokens is not marked occupied.
+    """
+    name = class_name.lower().replace("_", " ").replace("-", " ")
     if any(hint in name for hint in _EMPTY_HINTS):
         return "empty"
     if any(hint in name for hint in _OCCUPIED_HINTS):
@@ -55,34 +61,27 @@ def slot_status(class_name: str) -> str:
     return "occupied"
 
 
-def warp_slot_crop(image: np.ndarray, quad: tuple[tuple[int, int], ...], width: int = 64, height: int = 128) -> np.ndarray | None:
-    """Warp an arbitrary quadrilateral parking stall to an upright rectified rectangle.
-    
-    Prevents diagonal stalls from bleeding into adjacent bays or surrounding sidewalks.
+def slots_from_boxes(names: dict, boxes) -> list[Slot]:
+    """Read Ultralytics boxes into slot records.
+
+    ``names`` is the model's ``result.names`` mapping. ``boxes`` is
+    ``result.boxes``.
     """
-    src_pts = np.array(quad, dtype=np.float32)
-    if len(src_pts) != 4:
-        return None
-    
-    # Order points: top-left, top-right, bottom-right, bottom-left
-    rect = np.zeros((4, 2), dtype=np.float32)
-    s = src_pts.sum(axis=1)
-    rect[0] = src_pts[np.argmin(s)]
-    rect[2] = src_pts[np.argmax(s)]
-    diff = np.diff(src_pts, axis=1)
-    rect[1] = src_pts[np.argmin(diff)]
-    rect[3] = src_pts[np.argmax(diff)]
-
-    dst_pts = np.array([
-        [0, 0],
-        [width - 1, 0],
-        [width - 1, height - 1],
-        [0, height - 1]
-    ], dtype=np.float32)
-
-    matrix = cv2.getPerspectiveTransform(rect, dst_pts)
-    warped = cv2.warpPerspective(image, matrix, (width, height), flags=cv2.INTER_LINEAR)
-    return warped
+    slots: list[Slot] = []
+    if boxes is None or len(boxes) == 0:
+        return slots
+    for box in boxes:
+        class_id = int(box.cls[0])
+        class_name = str(names[class_id])
+        x1, y1, x2, y2 = (int(round(v)) for v in box.xyxy[0].tolist())
+        slots.append(
+            Slot(
+                status=slot_status(class_name),
+                confidence=float(box.conf[0]),
+                xyxy=(x1, y1, x2, y2),
+            )
+        )
+    return slots
 
 
 def annotate(image_rgb: np.ndarray, slots: list[Slot]) -> np.ndarray:
@@ -96,21 +95,18 @@ def annotate(image_rgb: np.ndarray, slots: list[Slot]) -> np.ndarray:
         rgb = EMPTY_RGB if slot.status == "empty" else OCCUPIED_RGB
         color = (rgb[2], rgb[1], rgb[0])
         x1, y1, x2, y2 = slot.xyxy
-
         if slot.quad is not None:
             corners = np.array(slot.quad, dtype=np.int32)
-            cv2.polylines(canvas, [corners], isClosed=True, color=color, thickness=thickness)
+            cv2.polylines(canvas, [corners], True, color, thickness)
             x1 = int(min(point[0] for point in slot.quad))
             y1 = int(min(point[1] for point in slot.quad))
-            x2 = int(max(point[0] for point in slot.quad))
         else:
             cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness)
-
         label = "occ" if slot.status == "occupied" else "empty"
         (tw, th), baseline = cv2.getTextSize(
             label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
         )
-        if (x2 - x1) >= tw + 4:
+        if (x2 - x1) >= tw + 8:
             top = max(0, y1 - th - baseline - 4)
             cv2.rectangle(
                 canvas, (x1, top), (x1 + tw + 6, top + th + baseline + 4), color, -1
@@ -135,6 +131,8 @@ def count_slots(slots: list[Slot]) -> tuple[int, int]:
     return occupied, empty
 
 
+# Used only when the sample frames cannot be read. The live limit is the
+# mean number of open bays across those frames.
 _FALLBACK_OPEN_FRACTION = 46 / 144
 _SAMPLE_RATE = 22050
 
@@ -150,7 +148,12 @@ class ParkingInsights:
 
 
 def summarize(occupied: int, empty: int) -> ParkingInsights:
-    """Count slots and classify congestion."""
+    """Count slots and classify congestion.
+
+    ``occupied`` and ``empty`` are the number of detected bays of each kind.
+    A lot with no detections is reported separately so the dashboard does not
+    pretend the car park is empty.
+    """
     if occupied < 0 or empty < 0:
         raise ValueError("Slot counts cannot be negative.")
 
@@ -164,14 +167,14 @@ def summarize(occupied: int, empty: int) -> ParkingInsights:
             level="No slots detected",
             recommendation=(
                 "No parking slots were detected in this frame. "
-                "Try a clearer camera view or verify alignment."
+                "Try a clearer camera view or a lower confidence threshold."
             ),
         )
 
     occupancy = occupied / total * 100.0
     share_open = empty / total
     average_open = open_bay_average().fraction
-    
+    # Free sits at twice the usual number of open bays, full at half of it.
     if share_open >= average_open * 2:
         level = "Low"
         recommendation = "Slots available — proceed."
@@ -180,7 +183,9 @@ def summarize(occupied: int, empty: int) -> ParkingInsights:
         recommendation = "Parking full — try another area."
     else:
         level = "Moderate"
-        recommendation = "Some slots are open — proceed, and take the nearest empty bay."
+        recommendation = (
+            "Some slots are open — proceed, and take the nearest empty bay."
+        )
 
     return ParkingInsights(
         total=total,
@@ -192,6 +197,7 @@ def summarize(occupied: int, empty: int) -> ParkingInsights:
     )
 
 
+# Row bands (top, bottom) as fractions of the frame.
 ROW_BANDS: tuple[tuple[float, float], ...] = (
     (0.000, 0.070),
     (0.075, 0.150),
@@ -373,7 +379,13 @@ def _align_to_reference(image: np.ndarray, reference: np.ndarray) -> np.ndarray 
 
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
     pairs = matcher.knnMatch(desc_image, desc_reference, k=2)
-    good = [m for m, n in pairs if len((m, n)) == 2 and m.distance < 0.75 * n.distance]
+    good = []
+    for pair in pairs:
+        if len(pair) < 2:
+            continue
+        best, second = pair
+        if best.distance < 0.75 * second.distance:
+            good.append(best)
     if len(good) < 12:
         return None
 
@@ -417,7 +429,11 @@ def _registered(image: np.ndarray, reference: np.ndarray) -> bool:
     return _grass_correlation(image, reference) >= 0.20
 
 
-def read_lot(image_bgr: np.ndarray, reference_bgr: np.ndarray, occupied_below: float = OCCUPIED_BELOW) -> LotReading:
+def read_lot(image_bgr: np.ndarray, reference_bgr: np.ndarray | None, occupied_below: float = OCCUPIED_BELOW) -> LotReading:
+    """Mark every calibrated bay occupied or empty."""
+    if reference_bgr is None:
+        return LotReading(slots=[], same_camera=False, aligned_bgr=image_bgr)
+
     matched = _registered(image_bgr, reference_bgr)
     if not matched:
         aligned = _align_to_reference(image_bgr, reference_bgr)
@@ -461,11 +477,18 @@ def read_lot(image_bgr: np.ndarray, reference_bgr: np.ndarray, occupied_below: f
     return LotReading(slots=slots, same_camera=matched or grass >= 0.20, aligned_bgr=image_bgr)
 
 
-def load_reference(samples_dir: Path) -> np.ndarray:
+def load_reference(samples_dir: Path) -> np.ndarray | None:
+    """Empty plate for this camera. Returns None if absent instead of terminating."""
     path = samples_dir / REFERENCE_NAME
+    if not path.is_file():
+        alt_path = _SCRIPT_DIR.parent / "samples" / REFERENCE_NAME
+        if alt_path.is_file():
+            path = alt_path
+        else:
+            return None
     image = cv2.imread(str(path))
     if image is None:
-        raise FileNotFoundError(f"Empty-lot plate not found at {path}")
+        return None
     return _clear_parked_vehicles(image)
 
 
@@ -763,24 +786,6 @@ def _slant_peaks(gray: np.ndarray) -> list[float]:
     return [degree for degree in kept[:4] if _angle_delta(degree, 0) >= 20 and _angle_delta(degree, 90) >= 20]
 
 
-def _quad_from_upright(inverse, cx, cy, half_w, half_l, shape):
-    height, width = shape[:2]
-
-    def original(x, y):
-        return (
-            inverse[0, 0] * x + inverse[0, 1] * y + inverse[0, 2],
-            inverse[1, 0] * x + inverse[1, 1] * y + inverse[1, 2],
-        )
-
-    center = original(cx, cy)
-    if not (6 < center[0] < width - 6 and 6 < center[1] < height - 6):
-        return None
-    corners = [original(cx + dx, cy + dy) for dx in (-half_w, half_w) for dy in (-half_l, half_l)]
-    order = np.argsort([np.arctan2(y - center[1], x - center[0]) for x, y in corners])
-    ordered = [corners[index] for index in order]
-    return tuple((int(round(np.clip(x, 0, width - 1))), int(round(np.clip(y, 0, height - 1)))) for x, y in ordered)
-
-
 def _foliage_fraction(hsv) -> float:
     pixels = np.asarray(hsv).reshape(-1, 3)
     if pixels.size == 0:
@@ -802,6 +807,24 @@ def _core_sample(gray, hsv, probe, cx, cy, width, length):
         _foliage_fraction(hsv[y1:y2, x1:x2]),
         float(np.median(gray[y1:y2, x1:x2])),
     )
+
+
+def _quad_from_upright(inverse, cx, cy, half_w, half_l, shape):
+    height, width = shape[:2]
+
+    def original(x, y):
+        return (
+            inverse[0, 0] * x + inverse[0, 1] * y + inverse[0, 2],
+            inverse[1, 0] * x + inverse[1, 1] * y + inverse[1, 2],
+        )
+
+    center = original(cx, cy)
+    if not (6 < center[0] < width - 6 and 6 < center[1] < height - 6):
+        return None
+    corners = [original(cx + dx, cy + dy) for dx in (-half_w, half_w) for dy in (-half_l, half_l)]
+    order = np.argsort([np.arctan2(y - center[1], x - center[0]) for x, y in corners])
+    ordered = [corners[index] for index in order]
+    return tuple((int(round(np.clip(x, 0, width - 1))), int(round(np.clip(y, 0, height - 1)))) for x, y in ordered)
 
 
 def _upright_vehicles(image, peak):
@@ -912,7 +935,6 @@ def _slant_car_slots(image: np.ndarray, peaks: list[float]) -> list[Slot]:
         stall_l = float(np.clip(med_l, 38, med_l * 1.05))
         stall_w = float(np.clip(min(med_w * 1.1, pitch * 0.82), med_w * 0.72, pitch * 0.88))
         slope = centers[0]
-        
         for car in cars:
             stats = _core_sample(gray, hsv, probe, car[0], car[1], stall_w, stall_l)
             if stats is None or stats[2] > 0.14 or stats[0] < 0.14:
@@ -920,7 +942,6 @@ def _slant_car_slots(image: np.ndarray, peaks: list[float]) -> list[Slot]:
             quad = _quad_from_upright(inverse, car[0], car[1], stall_w / 2, stall_l / 2, image.shape)
             if quad is not None:
                 found.append((quad, False))
-                
             for direction in (1, -1):
                 cx = car[0] + direction * pitch
                 cy = car[1] + direction * pitch * slope
@@ -981,22 +1002,23 @@ def read_lined(image_bgr: np.ndarray) -> tuple[list[Slot], np.ndarray]:
     return _slots_upright(image_bgr), image_bgr
 
 
-# Model paths supporting standard detection and oriented bounding boxes (OBB)
-MODEL_OBB_PATH = MODELS / "parking-yolov8n-obb.pt"
 MODEL_PATH = MODELS / "pklot-yolov8n.pt"
-_CONFIDENCE = 0.25
+MODEL_OBB_PATH = MODELS / "parking-yolov8n-obb.pt"
+_CONFIDENCE = 0.28
 _IMAGE_SIZE = 960
 _MODEL_MIN_BAYS = 4
 
 
 @lru_cache(maxsize=2)
 def load_model(obb: bool = False):
-    """Load parking-space weights (either oriented bounding box or standard PKLot)."""
     target = MODEL_OBB_PATH if obb and MODEL_OBB_PATH.is_file() else MODEL_PATH
     if not target.is_file():
         return None
-    from ultralytics import YOLO
-    return YOLO(str(target))
+    try:
+        from ultralytics import YOLO
+        return YOLO(str(target))
+    except Exception:
+        return None
 
 
 def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -1023,7 +1045,6 @@ def _dedupe(slots: list[Slot]) -> list[Slot]:
 
 
 def _detect(image_bgr: np.ndarray) -> list[Slot]:
-    """Run model inference, parsing oriented bounding boxes (obb) when present."""
     model = load_model(obb=True) or load_model(obb=False)
     if model is None:
         return []
@@ -1035,32 +1056,28 @@ def _detect(image_bgr: np.ndarray) -> list[Slot]:
         iou=0.45,
         imgsz=_IMAGE_SIZE,
     )[0]
-    
     names = result.names
     height, width = image_bgr.shape[:2]
     frame = float(height * width)
     slots: list[Slot] = []
 
-    # Check for YOLO OBB (Oriented Bounding Boxes: xyxyxyxy)
     if hasattr(result, "obb") and result.obb is not None and len(result.obb) > 0:
         for obb in result.obb:
             class_id = int(obb.cls[0])
             status = slot_status(str(names[class_id]))
-            conf = float(obb.conf[0])
             poly = obb.xyxyxyxy[0].cpu().numpy().astype(int)
             quad = tuple((int(pt[0]), int(pt[1])) for pt in poly)
             xs = [pt[0] for pt in quad]
             ys = [pt[1] for pt in quad]
             xyxy = (max(0, min(xs)), max(0, min(ys)), min(width - 1, max(xs)), min(height - 1, max(ys)))
-            slots.append(Slot(status=status, confidence=conf, xyxy=xyxy, quad=quad))
+            slots.append(Slot(status=status, confidence=float(obb.conf[0]), xyxy=xyxy, quad=quad))
         return _dedupe(slots)
 
     if result.boxes is None:
         return slots
-
     for box in result.boxes:
-        class_id = int(box.cls[0])
-        status = slot_status(str(names[class_id]))
+        label = str(names[int(box.cls[0])]).lower()
+        status = "empty" if any(h in label for h in _EMPTY_HINTS) else "occupied"
         x1, y1, x2, y2 = (int(round(v)) for v in box.xyxy[0].tolist())
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(width - 1, x2), min(height - 1, y2)
@@ -1070,7 +1087,6 @@ def _detect(image_bgr: np.ndarray) -> list[Slot]:
         if x2 - x1 < 6 or y2 - y1 < 6:
             continue
         slots.append(Slot(status=status, confidence=float(box.conf[0]), xyxy=(x1, y1, x2, y2)))
-        
     return _dedupe(slots)
 
 
@@ -1123,6 +1139,8 @@ def open_bay_average() -> OpenAverage:
     if not paths:
         return OpenAverage(_FALLBACK_OPEN_FRACTION, 46.0, 0)
     plate = load_reference(SAMPLES)
+    if plate is None:
+        return OpenAverage(_FALLBACK_OPEN_FRACTION, 46.0, 0)
     fractions: list[float] = []
     opens: list[int] = []
     for path in paths:
@@ -1595,7 +1613,7 @@ def main() -> None:
     with st.spinner("Reading this frame…"):
         plate = reference()
         bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        reading = read_lot(bgr, plate)
+        reading = read_lot(bgr, plate) if plate is not None else LotReading(slots=[], same_camera=False, aligned_bgr=bgr)
         if not reading.slots:
             reading = read_overhead(bgr)
 
