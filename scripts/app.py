@@ -1,1576 +1,1706 @@
-import sys
-from pathlib import Path
-import struct
-import math
-import base64
+"""ParkVision AI.
 
-APP_DIR = Path(__file__).resolve().parent
-ROOT_DIR = APP_DIR.parent
-for p in [str(ROOT_DIR), str(APP_DIR)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-import streamlit as st
-import numpy as np
-import pandas as pd
-import cv2
-from PIL import Image
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# --------------------------------------------------
-# CONFIGURATION
-# --------------------------------------------------
-
-APP_DIR = Path(__file__).resolve().parent
-ROOT_DIR = APP_DIR.parent
-
-IMAGE_SIZE = (224, 224)
-
-st.set_page_config(
-    page_title="ParkVision AI | Smart Parking Intelligence",
-    page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# --------------------------------------------------
-# SOUND SYNTHESIZER & SHAKING BELL ALERT
-# --------------------------------------------------
-
-@st.cache_data
-def generate_irritating_alarm_b64(duration: float = 3.3) -> str:
-    """Irritating high-frequency alternating strobe buzzer alarm (3.3 seconds)."""
-    sample_rate = 11025
-    num_samples = int(sample_rate * duration)
-    raw = bytearray()
-    for i in range(num_samples):
-        t = i / sample_rate
-        # Rapid dissonant frequency modulation (1280 Hz and 860 Hz)
-        f = 1280.0 if (int(t * 8.5) % 2 == 0) else 860.0
-        sample1 = math.sin(2.0 * math.pi * f * t)
-        sample2 = 0.55 * math.sin(2.0 * math.pi * f * 1.414 * t)
-        val = (sample1 + sample2) / 1.55
-        if t > duration - 0.25:
-            val *= (duration - t) / 0.25
-        s = int(32767.0 * 0.55 * val)
-        s = max(-32768, min(32767, s))
-        raw.extend(struct.pack("<h", s))
-    header = bytearray(b"RIFF") + struct.pack("<I", 36 + len(raw)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16) + b"data" + struct.pack("<I", len(raw))
-    return base64.b64encode(header + raw).decode("ascii")
-
-
-def trigger_shaking_bell_alert():
-    """Display a centered violently shaking bell overlay with an irritating alarm for 3.5 seconds, then remove it."""
-    b64_sound = generate_irritating_alarm_b64(3.3)
-    alert_html = f"""
-    <div id="shaking-bell-overlay" style="
-        position: fixed;
-        top: 0; left: 0; width: 100vw; height: 100vh;
-        background: rgba(3, 7, 18, 0.78);
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        z-index: 99999999;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        animation: overlayFadeIn 0.2s ease-out;
-        pointer-events: none;
-    ">
-        <div style="
-            background: rgba(15, 23, 42, 0.96);
-            border: 2.5px solid #ef4444;
-            box-shadow: 0 0 60px rgba(239, 68, 68, 0.85), 0 0 120px rgba(239, 68, 68, 0.45);
-            border-radius: 24px;
-            padding: 35px 55px;
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 14px;
-            max-width: 480px;
-        ">
-            <div style="
-                font-size: 5.5rem;
-                line-height: 1;
-                display: inline-block;
-                animation: bellShakeAnim 0.30s infinite ease-in-out;
-                transform-origin: top center;
-                filter: drop-shadow(0 0 25px #ef4444);
-            ">
-                🔔
-            </div>
-            <div style="font-size: 1.55rem; font-weight: 900; color: #f87171; letter-spacing: 1px; text-transform: uppercase;">
-                🚨 CRITICAL FACILITY ALERT!
-            </div>
-            <div style="font-size: 0.95rem; color: #cbd5e1; font-weight: 500;">
-                High congestion detected. Maximum capacity threshold exceeded!
-            </div>
-        </div>
-    </div>
-    <audio autoplay style="display:none;">
-        <source src="data:audio/wav;base64,{b64_sound}" type="audio/wav">
-    </audio>
-    <script>
-    try {{
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const duration = 3.3;
-        const now = audioCtx.currentTime;
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = 'sawtooth';
-        for (let i = 0; i < 28; i++) {{
-            const t = now + i * 0.118;
-            osc.frequency.setValueAtTime(i % 2 === 0 ? 1280 : 860, t);
-        }}
-        gain.gain.setValueAtTime(0.45, now);
-        gain.gain.setValueAtTime(0.45, now + duration - 0.25);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start(now);
-        osc.stop(now + duration);
-    }} catch(e) {{}}
-
-    // Auto-remove shaking bell after 3.5 seconds
-    setTimeout(() => {{
-        const el = document.getElementById("shaking-bell-overlay");
-        if (el) {{
-            el.style.transition = "opacity 0.4s ease, transform 0.4s ease";
-            el.style.opacity = "0";
-            el.style.transform = "scale(0.85)";
-            setTimeout(() => el.remove(), 400);
-        }}
-    }}, 3500);
-    </script>
-    """
-    st.components.v1.html(alert_html, height=0, width=0)
-
-
-@st.cache_data
-def generate_critical_siren_b64() -> str:
-    """Alarm 1: Urgent pulsing hazard siren."""
-    return generate_irritating_alarm_b64(3.3)
-
-
-@st.cache_data
-def generate_available_chime_b64() -> str:
-    """Alarm 2: Pleasant ascending 3-note chime when parking spaces are available."""
-    sample_rate = 22050
-    duration = 0.50
-    num_samples = int(sample_rate * duration)
-    raw = bytearray()
-    notes = [523.25, 659.25, 783.99]  # C5, E5, G5
-    sub_dur = duration / len(notes)
-    
-    for i in range(num_samples):
-        t = i / sample_rate
-        note_idx = min(len(notes) - 1, int(t / sub_dur))
-        f = notes[note_idx]
-        note_t = t % sub_dur
-        decay = math.exp(-4.2 * note_t)
-        sample = int(32767.0 * 0.42 * decay * math.sin(2.0 * math.pi * f * t))
-        sample = max(-32768, min(32767, sample))
-        raw.extend(struct.pack("<h", sample))
-    
-    header = bytearray(b"RIFF")
-    header.extend(struct.pack("<I", 36 + len(raw)))
-    header.extend(b"WAVEfmt ")
-    header.extend(struct.pack("<IHHIIHH", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16))
-    header.extend(b"data")
-    header.extend(struct.pack("<I", len(raw)))
-    return base64.b64encode(header + raw).decode("ascii")
-
-
-def trigger_audio(sound_type: str = "critical"):
-    """Inject browser audio playback for the requested alarm type."""
-    if sound_type == "critical":
-        b64_sound = generate_critical_siren_b64()
-        web_freq1, web_freq2, wave_type = 880, 587, "sawtooth"
-    else:
-        b64_sound = generate_available_chime_b64()
-        web_freq1, web_freq2, wave_type = 523, 784, "sine"
-
-    audio_html = f"""
-    <audio autoplay style="display:none;">
-        <source src="data:audio/wav;base64,{b64_sound}" type="audio/wav">
-    </audio>
-    <script>
-    try {{
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = '{wave_type}';
-        osc.frequency.setValueAtTime({web_freq1}, audioCtx.currentTime);
-        osc.frequency.setValueAtTime({web_freq2}, audioCtx.currentTime + 0.18);
-        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.45);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.45);
-    }} catch(e) {{}}
-    </script>
-    """
-    st.components.v1.html(audio_html, height=0, width=0)
-
-# --------------------------------------------------
-# CUSTOM CSS & VISUAL THEME
-# --------------------------------------------------
-
-CUSTOM_CSS = """
-<style>
-/* Root Background & Surveillance Styling */
-.stApp {
-    background-color: #070b13;
-    background-image: 
-        radial-gradient(at 0% 0%, rgba(14, 165, 233, 0.18) 0px, transparent 50%),
-        radial-gradient(at 100% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
-        radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.12) 0px, transparent 50%),
-        linear-gradient(rgba(10, 16, 28, 0.88), rgba(6, 10, 18, 0.94)),
-        url("https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=1920&q=80");
-    background-size: cover;
-    background-position: center;
-    background-attachment: fixed;
-    color: #e2e8f0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-
-/* Glassmorphism Cards */
-.park-glass-card {
-    background: rgba(15, 23, 42, 0.78);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    padding: 20px 24px;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-    margin-bottom: 20px;
-}
-
-/* Header Container */
-.park-header-container {
-    background: linear-gradient(135deg, rgba(14, 165, 233, 0.15) 0%, rgba(99, 102, 241, 0.1) 50%, rgba(15, 23, 42, 0.82) 100%);
-    border: 1px solid rgba(56, 189, 248, 0.35);
-    border-radius: 18px;
-    padding: 24px 30px;
-    margin-bottom: 22px;
-    box-shadow: 0 0 25px rgba(14, 165, 233, 0.15);
-}
-
-.park-logo-title {
-    font-size: 2.2rem;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #34d399 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.park-subtitle {
-    color: #94a3b8;
-    font-size: 0.95rem;
-    margin-top: 6px;
-    font-weight: 400;
-}
-
-/* Badges */
-.telemetry-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    border-radius: 9999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-}
-
-.badge-green {
-    background: rgba(16, 185, 129, 0.15);
-    color: #34d399;
-    border: 1px solid rgba(52, 211, 153, 0.3);
-}
-
-.badge-blue {
-    background: rgba(14, 165, 233, 0.15);
-    color: #38bdf8;
-    border: 1px solid rgba(56, 189, 248, 0.3);
-}
-
-/* KPI Telemetry Grid */
-.kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 22px;
-}
-
-.kpi-card {
-    background: rgba(15, 23, 42, 0.72);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 14px;
-    padding: 16px 20px;
-}
-
-.kpi-title {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 6px;
-}
-
-.kpi-value {
-    font-size: 1.85rem;
-    font-weight: 800;
-    line-height: 1.1;
-    margin-bottom: 4px;
-}
-
-.kpi-caption {
-    font-size: 0.75rem;
-    color: #64748b;
-}
-
-/* Glowing Pulsing Alert Banners */
-@keyframes pulse-red {
-    0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
-    70% { box-shadow: 0 0 0 16px rgba(239, 68, 68, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-}
-
-@keyframes bellShakeAnim {
-    0% { transform: rotate(0deg) scale(1); }
-    10% { transform: rotate(-28deg) scale(1.15); }
-    20% { transform: rotate(28deg) scale(1.2); }
-    30% { transform: rotate(-24deg) scale(1.15); }
-    40% { transform: rotate(24deg) scale(1.2); }
-    50% { transform: rotate(-18deg) scale(1.1); }
-    60% { transform: rotate(18deg) scale(1.1); }
-    70% { transform: rotate(-12deg) scale(1.05); }
-    80% { transform: rotate(12deg) scale(1.05); }
-    90% { transform: rotate(-5deg) scale(1); }
-    100% { transform: rotate(0deg) scale(1); }
-}
-
-@keyframes overlayFadeIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
-}
-
-.alert-banner-high {
-    background: linear-gradient(135deg, rgba(239, 68, 68, 0.22) 0%, rgba(153, 27, 27, 0.35) 100%);
-    border: 2px solid #ef4444;
-    border-radius: 14px;
-    padding: 18px 24px;
-    margin-bottom: 22px;
-    animation: pulse-red 2s infinite;
-}
-
-.alert-banner-moderate {
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(180, 83, 9, 0.3) 100%);
-    border: 1.5px solid #f59e0b;
-    border-radius: 14px;
-    padding: 16px 22px;
-    margin-bottom: 22px;
-}
-
-.alert-banner-low {
-    background: linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(6, 95, 70, 0.25) 100%);
-    border: 1.5px solid #10b981;
-    border-radius: 14px;
-    padding: 16px 22px;
-    margin-bottom: 22px;
-}
-
-/* Slot Matrix Chips */
-.slot-chip {
-    display: inline-flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    margin: 4px;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    min-width: 110px;
-}
-
-.slot-empty {
-    background: rgba(16, 185, 129, 0.15);
-    border: 1px solid rgba(52, 211, 153, 0.4);
-    color: #34d399;
-}
-
-.slot-occupied {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(248, 113, 113, 0.4);
-    color: #f87171;
-}
-
-/* Native Overrides */
-div[data-testid="stSidebar"] {
-    background-color: rgba(10, 16, 28, 0.95) !important;
-    backdrop-filter: blur(12px) !important;
-    border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
-}
-
-.stButton>button {
-    background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%) !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: 8px 16px !important;
-    transition: all 0.2s ease !important;
-}
-
-.stButton>button:hover {
-    box-shadow: 0 0 15px rgba(14, 165, 233, 0.5) !important;
-    transform: translateY(-1px) !important;
-}
-</style>
+One Streamlit file. Upload an overhead shot of a lined parking lot, or open a
+sample frame. Bays that match the sample camera use that camera's map. Any
+other overhead shot is read from a parking-space model, or from the painted
+stall lines when the shot is straight down. On a diagonal or herringbone lot,
+each stall is boxed along its row. An open bay between two cars is marked
+empty, and so is an open stall whose painted sides are still visible.
 """
 
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+from __future__ import annotations
 
-# --------------------------------------------------
-# SIDEBAR: SYSTEM INFORMATION & TELEMETRY STATUS
-# --------------------------------------------------
+import base64
+import io
+import wave
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
-with st.sidebar:
-    st.markdown(
-        """
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
-            <span style="font-size: 2rem;">🚗</span>
-            <div>
-                <div style="font-size: 1.3rem; font-weight: 800; background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">PARKVISION</div>
-                <div style="font-size: 0.72rem; color: #64748b; font-weight: 600; letter-spacing: 0.5px;">SMART SURVEILLANCE AI</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+import cv2
+import numpy as np
+import streamlit as st
+from PIL import Image
 
-    st.markdown("---")
-    st.markdown("#### 📡 System Status")
-    st.markdown(
-        """
-        <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(52, 211, 153, 0.3); border-radius: 10px; padding: 12px; margin-bottom: 15px;">
-            <div style="font-size: 0.85rem; font-weight: 700; color: #34d399;">● AI PIPELINE ACTIVE</div>
-            <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px;">Automated optical detection & dual-frequency alarm monitoring enabled.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("#### ℹ️ Project Architecture")
-    st.caption(
-        "**Input:** Parking lot surveillance image  \n"
-        "**Output:** Slot-wise Empty / Occupied status  \n"
-        "**Approach:** Crop-based neural feature classification  \n"
-        "**Mitigations:** Shadow invariance, multi-weather training (sunny, cloudy, rainy)."
-    )
-
-    st.markdown("---")
-    st.caption("Course Assessment: `IADAI201-1000442-ZENE-SOPHIE-ANAND-SA`")
-
-# --------------------------------------------------
-# MODEL LOADING (Immune to Pickle / NumPy Mismatches)
-# --------------------------------------------------
-
-@st.cache_resource
-def load_model():
-    """Load the trained Vision Model using portable pure NumPy weights or Keras."""
-    # 1. Pure NumPy Calibrated Weights (Zero Pickle Dependencies — 100% Reliable)
-    candidate_npz = [
-        ROOT_DIR / "models" / "parking_mlp_weights.npz",
-        APP_DIR / "models" / "parking_mlp_weights.npz",
-        Path("models/parking_mlp_weights.npz"),
-    ]
-    for weights_path in candidate_npz:
-        if weights_path.exists():
-            try:
-                data = np.load(str(weights_path))
-                return {
-                    "type": "pure_numpy",
-                    "scaler_mean": data["scaler_mean"],
-                    "scaler_scale": data["scaler_scale"],
-                    "num_layers": int(data["num_layers"][0]),
-                    "weights": [data[f"w_{i}"] for i in range(int(data["num_layers"][0]))],
-                    "biases": [data[f"b_{i}"] for i in range(int(data["num_layers"][0]))],
-                    "classes": list(data["classes"]),
-                    "path": str(weights_path),
-                }
-            except Exception:
-                pass
-
-    # 2. Check MobileNet Keras model
-    for path in [ROOT_DIR / "models" / "parking_mobilenet.keras", APP_DIR / "models" / "parking_mobilenet.keras"]:
-        if path.exists():
-            try:
-                from tensorflow.keras.models import load_model as keras_load
-                model = keras_load(path, compile=False)
-                return {
-                    "model": model,
-                    "type": "mobilenet",
-                    "path": str(path),
-                }
-            except Exception:
-                pass
-
-    # 3. Check Scikit-learn MLP model
-    for path in [ROOT_DIR / "models" / "parking_mlp.joblib", APP_DIR / "models" / "parking_mlp.joblib"]:
-        if path.exists():
-            try:
-                import joblib
-                payload = joblib.load(path)
-                return {
-                    "model": payload["model"],
-                    "classes": tuple(payload["classes"]),
-                    "type": "mlp",
-                    "path": str(path),
-                }
-            except Exception:
-                pass
-
-    return None
-
-# --------------------------------------------------
-# IMAGE HELPERS
-# --------------------------------------------------
-
-def load_image(uploaded_file):
-    """Convert an uploaded image into RGB format."""
-    return np.array(
-        Image.open(uploaded_file).convert("RGB")
-    )
+ROOT = Path(__file__).resolve().parent
+SAMPLES = ROOT / "samples"
+MODELS = ROOT / "models"
 
 
-def crop_slots(image, grid_rows, grid_cols):
-    """Split the image into equally sized grid cells."""
-    height, width = image.shape[:2]
-    slots = []
+# RGB colours required by the brief: green empty, red occupied.
+EMPTY_RGB = (34, 197, 94)
+OCCUPIED_RGB = (239, 68, 68)
 
-    for row in range(grid_rows):
-        for col in range(grid_cols):
-            x1 = round(col * width / grid_cols)
-            x2 = round((col + 1) * width / grid_cols)
-            y1 = round(row * height / grid_rows)
-            y2 = round((row + 1) * height / grid_rows)
-
-            crop = image[y1:y2, x1:x2]
-
-            if crop.size == 0:
-                continue
-
-            slots.append({
-                "id": len(slots) + 1,
-                "row": row,
-                "col": col,
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "crop": crop,
-            })
-
-    return slots
+_EMPTY_HINTS = ("empty", "free", "vacant", "available", "0")
+_OCCUPIED_HINTS = ("occupied", "busy", "taken", "full", "car", "vehicle", "1")
 
 
-def generate_smart_facility_slots(image):
+@dataclass(frozen=True)
+class Slot:
+    status: str
+    confidence: float
+    xyxy: tuple[int, int, int, int]
+    # Four corners [(x1,y1), (x2,y2), (x3,y3), (x4,y4)] when the bay is slanted
+    # or extracted via OBB. If None, drawn from xyxy.
+    quad: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
+
+
+def slot_status(class_name: str) -> str:
+    """Map a detector class name to ``empty`` or ``occupied``."""
+    name = class_name.lower().replace("_", " ").replace("-", " ").strip()
+    if any(hint in name for hint in _EMPTY_HINTS):
+        return "empty"
+    if any(hint in name for hint in _OCCUPIED_HINTS):
+        return "occupied"
+    return "occupied"
+
+
+def warp_slot_crop(image: np.ndarray, quad: tuple[tuple[int, int], ...], width: int = 64, height: int = 128) -> np.ndarray | None:
+    """Warp an arbitrary quadrilateral parking stall to an upright rectified rectangle.
+    
+    Prevents diagonal stalls from bleeding into adjacent bays or surrounding sidewalks.
     """
-    Generate precisely aligned parking stall boxes confined strictly to physical parking bays.
-    Includes the Left Diagonal Wing (7 bays: D1-D7), all 4 main aisles (76 bays: S1-S76),
-    and Right Edge bays (4 bays: E1-E4) for a total of 87 dedicated parking spaces.
-    Driving lanes, central walkway, and roadways are completely excluded.
-    """
-    height, width = image.shape[:2]
-    slots = []
+    src_pts = np.array(quad, dtype=np.float32)
+    if len(src_pts) != 4:
+        return None
+    
+    # Order points: top-left, top-right, bottom-right, bottom-left
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = src_pts.sum(axis=1)
+    rect[0] = src_pts[np.argmin(s)]
+    rect[2] = src_pts[np.argmax(s)]
+    diff = np.diff(src_pts, axis=1)
+    rect[1] = src_pts[np.argmin(diff)]
+    rect[3] = src_pts[np.argmax(diff)]
 
-    # 1. Left Diagonal Wing (7 angled bays: D1 to D7)
-    left_diag_rel = [
-        (92 / 259, 116 / 259),
-        (116 / 259, 140 / 259),
-        (140 / 259, 165 / 259),
-        (165 / 259, 190 / 259),
-        (190 / 259, 212 / 259),
-        (212 / 259, 234 / 259),
-        (234 / 259, 255 / 259),
-    ]
-    for d_idx, (y1_r, y2_r) in enumerate(left_diag_rel):
-        y1 = max(0, int(round(y1_r * height)))
-        y2 = min(height, int(round(y2_r * height)))
-        x1 = max(0, int(round((4 / 460) * width)))
-        x2 = min(width, int(round((40 / 460) * width)))
-        crop = image[y1:y2, x1:x2]
-        if crop.size > 0:
-            slots.append({
-                "id": d_idx + 1,
-                "name": f"D{d_idx+1}",
-                "section": "Left Diagonal Wing",
-                "row_name": "Left Diagonal Wing",
-                "row": 0,
-                "col": d_idx + 1,
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "crop": crop,
-            })
-
-    # 2. Main 4 Physical Aisles (Aisle 1 to Aisle 4: S1 to S76)
-    aisles_rel = [
-        (15 / 259, 60 / 259),   # Aisle 1 (top bays)
-        (95 / 259, 140 / 259),  # Aisle 2 (mid-top bays)
-        (140 / 259, 185 / 259), # Aisle 3 (mid-bottom bays)
-        (215 / 259, 255 / 259), # Aisle 4 (bottom bays)
-    ]
-    aisle_names = [
-        "Aisle 1 (Top Bays)",
-        "Aisle 2 (Mid-Upper Bays)",
-        "Aisle 3 (Mid-Lower Bays)",
-        "Aisle 4 (Bottom Bays)",
-    ]
-
-    slot_id = 1
-    for aisle_idx, (y1_rel, y2_rel) in enumerate(aisles_rel):
-        y1 = max(0, int(round(y1_rel * height)))
-        y2 = min(height, int(round(y2_rel * height)))
-        r_name = aisle_names[aisle_idx]
-
-        # Left wing (9 stalls)
-        x_left_start = int(round((42 / 460) * width))
-        x_left_end = int(round((225 / 460) * width))
-        lw = (x_left_end - x_left_start) / 9.0
-        for i in range(9):
-            x1 = max(0, int(round(x_left_start + i * lw)))
-            x2 = min(width, int(round(x_left_start + (i + 1) * lw)))
-            crop = image[y1:y2, x1:x2]
-            if crop.size > 0:
-                slots.append({
-                    "id": slot_id,
-                    "name": f"S{slot_id}",
-                    "section": f"Aisle {aisle_idx+1} (Left)",
-                    "row_name": r_name,
-                    "row": aisle_idx + 1,
-                    "col": i + 1,
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "crop": crop,
-                })
-                slot_id += 1
-
-        # Right wing (10 stalls)
-        x_right_start = int(round((235 / 460) * width))
-        x_right_end = int(round((425 / 460) * width))
-        rw = (x_right_end - x_right_start) / 10.0
-        for i in range(10):
-            x1 = max(0, int(round(x_right_start + i * rw)))
-            x2 = min(width, int(round(x_right_start + (i + 1) * rw)))
-            crop = image[y1:y2, x1:x2]
-            if crop.size > 0:
-                slots.append({
-                    "id": slot_id,
-                    "name": f"S{slot_id}",
-                    "section": f"Aisle {aisle_idx+1} (Right)",
-                    "row_name": r_name,
-                    "row": aisle_idx + 1,
-                    "col": 10 + i,
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "crop": crop,
-                })
-                slot_id += 1
-
-    # 3. Right Edge Bays (4 bays: E1 to E4)
-    x1_edge = max(0, int(round((425 / 460) * width)))
-    x2_edge = min(width, int(round((458 / 460) * width)))
-    for e_idx, (y1_rel, y2_rel) in enumerate(aisles_rel):
-        y1 = max(0, int(round(y1_rel * height)))
-        y2 = min(height, int(round(y2_rel * height)))
-        crop = image[y1:y2, x1_edge:x2_edge]
-        if crop.size > 0:
-            slots.append({
-                "id": e_idx + 1,
-                "name": f"E{e_idx+1}",
-                "section": f"Right Edge Bay {e_idx+1}",
-                "row_name": "Right Edge Bays",
-                "row": 5,
-                "col": e_idx + 1,
-                "x1": x1_edge,
-                "y1": y1,
-                "x2": x2_edge,
-                "y2": y2,
-                "crop": crop,
-            })
-
-    return slots
-
-# --------------------------------------------------
-# PREDICTION ENGINE
-# --------------------------------------------------
-
-_preprocess_input = None
-
-def get_preprocess_input():
-    global _preprocess_input
-    if _preprocess_input is None:
-        from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-        _preprocess_input = preprocess_input
-    return _preprocess_input
-
-
-def extract_slot_features(image: np.ndarray) -> np.ndarray:
-    """Extract invariant multi-spectral, texture, and edge features for occupancy detection."""
-    rgb = image if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    h, w = rgb.shape[:2]
-
-    # 1. 32x32 color downsample (3,072 features)
-    tiny = cv2.resize(rgb, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
-    f_tiny = tiny.reshape(-1)
-
-    # 2. Color and luminance statistics
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-
-    mean_r, std_r = float(np.mean(rgb[:, :, 0])), float(np.std(rgb[:, :, 0]))
-    mean_g, std_g = float(np.mean(rgb[:, :, 1])), float(np.std(rgb[:, :, 1]))
-    mean_b, std_b = float(np.mean(rgb[:, :, 2])), float(np.std(rgb[:, :, 2]))
-    mean_s, std_s = float(np.mean(hsv[:, :, 1])), float(np.std(hsv[:, :, 1]))
-
-    # 3. Texture and edge density (Laplacian variance and Canny edge ratio)
-    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    edges = cv2.Canny(gray, 35, 110)
-    edge_ratio = float(np.mean(edges > 0))
-
-    # 4. Sub-quadrant variances (to capture localized vehicle presence in larger bays)
-    sub_h, sub_w = max(2, h // 2), max(2, w // 2)
-    quad_stds = []
-    for sy in range(2):
-        for sx in range(2):
-            sub = gray[sy * sub_h : (sy + 1) * sub_h, sx * sub_w : (sx + 1) * sub_w]
-            quad_stds.append(float(np.std(sub)) if sub.size > 0 else 0.0)
-
-    stats = np.array([
-        mean_r, std_r, mean_g, std_g, mean_b, std_b,
-        mean_s, std_s, lap_var, edge_ratio, *quad_stds
+    dst_pts = np.array([
+        [0, 0],
+        [width - 1, 0],
+        [width - 1, height - 1],
+        [0, height - 1]
     ], dtype=np.float32)
 
-    return np.concatenate([f_tiny, stats])
+    matrix = cv2.getPerspectiveTransform(rect, dst_pts)
+    warped = cv2.warpPerspective(image, matrix, (width, height), flags=cv2.INTER_LINEAR)
+    return warped
 
 
-def predict_slot(model_info, crop):
-    """Predict empty or occupied with high optical fidelity & robust asphalt baseline."""
-    rgb = crop if crop.ndim == 3 else cv2.cvtColor(crop, cv2.COLOR_GRAY2RGB)
-    h, w = rgb.shape[:2]
-    if h < 4 or w < 4:
-        return "empty", 0.50
+def annotate(image_rgb: np.ndarray, slots: list[Slot]) -> np.ndarray:
+    """Return a copy of ``image_rgb`` with colour-coded slot boxes."""
+    canvas = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    height = canvas.shape[0]
+    thickness = max(2, height // 320)
+    font_scale = max(0.4, height / 1400)
 
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    std_val = float(np.std(gray))
-
-    # Real-world parking lot detection:
-    # Asphalt baseline has uniform texture with std < 18.0.
-    # Every parked vehicle (metallic roof, glass, windshield, chassis) has std >= 18.0.
-    is_empty_asphalt = (std_val < 18.0)
-
-    if is_empty_asphalt:
-        return "empty", 0.96
-    else:
-        return "occupied", 0.97
-
-
-def demo_prediction(crop):
-    """Direct visual detector fallback."""
-    return predict_slot(None, crop)
-
-
-def classify_slots(model_info, image, grid_mode, grid_rows, grid_cols, preset=""):
-    """Segment image into slots and classify each slot live without stale cache."""
-    if "Smart Aerial Facility" in preset:
-        slots = generate_smart_facility_slots(image)
-    elif grid_mode == "Full parking lot (grid)":
-        slots = crop_slots(image, grid_rows, grid_cols)
-    else:
-        slots = [{
-            "id": 1,
-            "name": "S1",
-            "row": 0,
-            "col": 0,
-            "x1": 0,
-            "y1": 0,
-            "x2": image.shape[1],
-            "y2": image.shape[0],
-            "crop": image,
-        }]
-
-    # Ground truth mapping for Smart Aerial Facility
-    facility_gt = {
-        # Left Diagonal Wing (D1 to D7)
-        'D1': True, 'D2': True, 'D3': True, 'D4': True, 'D5': True, 'D6': False, 'D7': False,
-        # Right Edge Bays (E1 to E4)
-        'E1': True, 'E2': True, 'E3': False, 'E4': True,
-        # Aisle 1 (S1 to S19)
-        'S1': False, 'S2': True, 'S3': True, 'S4': True, 'S5': True, 'S6': True, 'S7': True, 'S8': True, 'S9': True,
-        'S10': True, 'S11': True, 'S12': True, 'S13': True, 'S14': True, 'S15': True, 'S16': True, 'S17': True, 'S18': True, 'S19': False,
-        # Aisle 2 (S20 to S38)
-        'S20': False, 'S21': False, 'S22': False, 'S23': False, 'S24': True, 'S25': True, 'S26': True, 'S27': False, 'S28': False,
-        'S29': False, 'S30': False, 'S31': False, 'S32': True, 'S33': False, 'S34': False, 'S35': False, 'S36': False, 'S37': True, 'S38': False,
-        # Aisle 3 (S39 to S57)
-        'S39': False, 'S40': False, 'S41': False, 'S42': True, 'S43': True, 'S44': True, 'S45': True, 'S46': True, 'S47': False, 'S48': False,
-        'S49': True, 'S50': True, 'S51': True, 'S52': True, 'S53': True, 'S54': True, 'S55': True, 'S56': True, 'S57': False,
-        # Aisle 4 (S58 to S76)
-        'S58': False, 'S59': False, 'S60': True, 'S61': False, 'S62': True, 'S63': False, 'S64': False, 'S65': False, 'S66': False,
-        'S67': True, 'S68': True, 'S69': False, 'S70': True, 'S71': False, 'S72': False, 'S73': False, 'S74': False, 'S75': False, 'S76': False,
-    }
-
-    results = []
     for slot in slots:
-        slot_tag = slot.get("name", f"S{slot['id']}")
-        if "Smart Aerial Facility" in preset and slot_tag in facility_gt:
-            is_occ = facility_gt[slot_tag]
-            label = "occupied" if is_occ else "empty"
-            confidence = 0.98 if is_occ else 0.97
+        rgb = EMPTY_RGB if slot.status == "empty" else OCCUPIED_RGB
+        color = (rgb[2], rgb[1], rgb[0])
+        x1, y1, x2, y2 = slot.xyxy
+
+        if slot.quad is not None:
+            corners = np.array(slot.quad, dtype=np.int32)
+            cv2.polylines(canvas, [corners], isClosed=True, color=color, thickness=thickness)
+            x1 = int(min(point[0] for point in slot.quad))
+            y1 = int(min(point[1] for point in slot.quad))
+            x2 = int(max(point[0] for point in slot.quad))
         else:
-            label, confidence = predict_slot(model_info, slot["crop"])
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness)
 
-        results.append({
-            **slot,
-            "label": label,
-            "confidence": confidence,
-        })
-    return results
-
-# --------------------------------------------------
-# OCCUPANCY INSIGHTS LOGIC (Rubric Aligned)
-# --------------------------------------------------
-
-def build_insights(labels):
-    total = len(labels)
-    occupied = sum(label == "occupied" for label in labels)
-    available = total - occupied
-    occupancy = (occupied / total * 100) if total > 0 else 0.0
-
-    if occupancy < 40:
-        congestion = "Low"
-        recommendation = "Slots available — proceed"
-    elif occupancy <= 75:
-        congestion = "Moderate"
-        recommendation = "Some slots available — proceed, but expect limited space"
-    else:
-        congestion = "High"
-        recommendation = "Parking full — try another area"
-
-    return {
-        "total": total,
-        "occupied": occupied,
-        "available": available,
-        "occupancy": occupancy,
-        "congestion": congestion,
-        "recommendation": recommendation,
-    }
-
-# --------------------------------------------------
-# ANNOTATION RENDERER
-# --------------------------------------------------
-
-def draw_annotations(image, slots):
-    """Draw high-visibility green boxes for empty and red boxes for occupied with adaptive scaling."""
-    annotated = image.copy()
-    overlay = annotated.copy()
-
-    for slot in slots:
-        x1, y1, x2, y2 = slot["x1"], slot["y1"], slot["x2"], slot["y2"]
-        bw = x2 - x1
-        is_occ = (slot["label"] == "occupied")
-        
-        # Color (BGR for OpenCV)
-        color = (239, 68, 68) if is_occ else (34, 197, 94)
-
-        # Subtle semi-transparent tint inside bay
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-
-        # Border thickness adapts to slot width
-        border_thick = 2 if bw > 50 else 1
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, border_thick)
-
-        # Adaptive text label size
-        scale = max(0.28, min(0.48, bw / 110.0))
-        tag = slot.get("name", f"S{slot['id']}")
-        label_text = f"{tag}:OCC" if is_occ else f"{tag}:EMP"
-        
-        text_y = min(y1 + int(14 * (scale / 0.35)), y2 - 4)
-        if text_y > y1:
-            cv2.putText(
-                annotated,
-                label_text,
-                (x1 + 3, text_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                scale,
-                (0, 0, 0),
-                2,
-                cv2.LINE_AA,
+        label = "occ" if slot.status == "occupied" else "empty"
+        (tw, th), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
+        )
+        if (x2 - x1) >= tw + 4:
+            top = max(0, y1 - th - baseline - 4)
+            cv2.rectangle(
+                canvas, (x1, top), (x1 + tw + 6, top + th + baseline + 4), color, -1
             )
             cv2.putText(
-                annotated,
-                label_text,
-                (x1 + 3, text_y),
+                canvas,
+                label,
+                (x1 + 3, top + th + 1),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                scale,
-                color,
+                font_scale,
+                (255, 255, 255),
                 1,
                 cv2.LINE_AA,
             )
 
-    # Blend subtle overlay (15% tint)
-    cv2.addWeighted(overlay, 0.15, annotated, 0.85, 0, annotated)
-    return annotated
+    return cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
 
-# --------------------------------------------------
-# MAIN APPLICATION
-# --------------------------------------------------
 
-def main():
-    # Header Banner with SVG Optic Logo
-    st.markdown(
-        """
-        <div class="park-header-container">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
-                <div>
-                    <h1 class="park-logo-title">
-                        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="24" height="24" rx="6" fill="url(#grad1)"/>
-                            <path d="M7 17V7H12.5C14.433 7 16 8.567 16 10.5C16 12.433 14.433 14 12.5 14H9.5V17H7Z" fill="white"/>
-                            <circle cx="18" cy="6" r="3" fill="#34D399"/>
-                            <defs>
-                                <linearGradient id="grad1" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-                                    <stop stop-color="#0EA5E9"/>
-                                    <stop offset="1" stop-color="#6366F1"/>
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        PARKVISION AI
-                    </h1>
-                    <div class="park-subtitle">Autonomous Optical Parking Space Detection & Real-Time Telemetry System</div>
-                </div>
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <span class="telemetry-badge badge-green">● Neural Vision Active</span>
-                    <span class="telemetry-badge badge-blue">● Real-Time Telemetry</span>
-                    <span class="telemetry-badge badge-green">● Latency: &lt;1ms</span>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def count_slots(slots: list[Slot]) -> tuple[int, int]:
+    occupied = sum(1 for slot in slots if slot.status == "occupied")
+    empty = sum(1 for slot in slots if slot.status == "empty")
+    return occupied, empty
 
-    # Load Vision Model
-    model_info = load_model()
-    if model_info is not None:
-        model_type_str = "MobileNetV2" if model_info.get("type") == "mobilenet" else "Neural Network (MLP)"
-        st.markdown(
-            f"""
-            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); border-radius: 12px; padding: 10px 18px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 1.2rem;">🟢</span>
-                    <span style="font-weight: 700; color: #34d399; font-size: 0.92rem;">TRAINED VISION MODEL LOADED: {model_type_str.upper()}</span>
-                </div>
-                <span style="font-size: 0.8rem; color: #94a3b8; font-family: monospace;">{Path(model_info['path']).name} (100% Calibrated Accuracy)</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.warning("Running heuristic fallback mode.")
 
-    # Top Action Bar: Alarm Audio Test Buttons
-    st.markdown(
-        """
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
-            <div style="font-size: 0.88rem; font-weight: 600; color: #94a3b8;">🔊 Dual-Frequency Alarm Monitors:</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    col_t1, col_t2, col_spacer = st.columns([1.5, 1.5, 3])
-    with col_t1:
-        if st.button("🚨 Test Hazard Alarm", help="Triggers centered shaking bell & piercing alert for 3.5s"):
-            trigger_shaking_bell_alert()
-            st.toast("🚨 Playing Hazard Siren & Shaking Bell Alert!", icon="🚨")
-    with col_t2:
-        if st.button("🔔 Test Vacancy Chime", help="Plays the ascending chime when parking slots are available"):
-            trigger_audio("available")
-            st.toast("🔔 Playing Vacancy Chime!", icon="🔔")
+_FALLBACK_OPEN_FRACTION = 46 / 144
+_SAMPLE_RATE = 22050
 
-    # Image source selector
-    samples_dir = ROOT_DIR / "data" / "samples"
-    sample_options = ["Upload my own parking image"]
-    sample_map = {}
-    if samples_dir.exists():
-        for sample_file in sorted(samples_dir.glob("*.jpg")):
-            name = sample_file.stem.replace("_", " ").title()
-            sample_options.append(name)
-            sample_map[name] = sample_file
 
-    col_src, col_info = st.columns([2, 1])
-    with col_src:
-        selected_source = st.selectbox(
-            "📹 Select Surveillance Feed / Image Source:",
-            sample_options,
-            help="Choose a pre-loaded sample from our weather & congestion dataset or upload custom footage.",
+@dataclass(frozen=True)
+class ParkingInsights:
+    total: int
+    occupied: int
+    available: int
+    occupancy_pct: float
+    level: str
+    recommendation: str
+
+
+def summarize(occupied: int, empty: int) -> ParkingInsights:
+    """Count slots and classify congestion."""
+    if occupied < 0 or empty < 0:
+        raise ValueError("Slot counts cannot be negative.")
+
+    total = occupied + empty
+    if total == 0:
+        return ParkingInsights(
+            total=0,
+            occupied=0,
+            available=0,
+            occupancy_pct=0.0,
+            level="No slots detected",
+            recommendation=(
+                "No parking slots were detected in this frame. "
+                "Try a clearer camera view or verify alignment."
+            ),
         )
 
-    image = None
-    if selected_source == "Upload my own parking image":
-        uploaded_file = st.file_uploader(
-            "Upload surveillance image (JPG, PNG)",
-            type=["jpg", "jpeg", "png"],
-        )
-        if uploaded_file is not None:
-            try:
-                image = load_image(uploaded_file)
-            except Exception as exc:
-                st.error(f"Could not read image: {exc}")
-                return
-    else:
-        sample_path = sample_map[selected_source]
-        try:
-            image = np.array(Image.open(sample_path).convert("RGB"))
-        except Exception as exc:
-            st.error(f"Could not load sample: {exc}")
-            return
-
-    if image is None:
-        st.markdown(
-            """
-            <div class="park-glass-card" style="text-align: center; padding: 40px 20px;">
-                <span style="font-size: 3rem;">📸</span>
-                <h3 style="color: #38bdf8; margin: 12px 0 6px 0;">No Camera Feed Selected</h3>
-                <p style="color: #94a3b8; max-width: 500px; margin: 0 auto 18px auto;">
-                    Select one of the demo parking lot surveillance images from the dropdown above, 
-                    or upload a photo from your facility to run automated slot detection.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    # In-Page Layout & Grid Configuration Controls (Directly above the image)
-    st.markdown(
-        """
-        <div class="park-glass-card" style="padding: 16px 22px; margin-bottom: 20px;">
-            <div style="font-size: 0.95rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px;">
-                📐 Parking Bay Grid & Segmentation Controls
-            </div>
-            <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 12px;">
-                Choose an aligned preset for your facility, or fine-tune rows and columns so every car gets its own individual slot box.
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    occupancy = occupied / total * 100.0
+    share_open = empty / total
+    average_open = open_bay_average().fraction
     
-    preset_col, mode_col = st.columns([2.5, 1.5])
-    with preset_col:
-        default_preset_idx = 0 if image.shape[1] > image.shape[0] * 1.35 else 2
-        preset = st.radio(
-            "Select Layout Preset:",
+    if share_open >= average_open * 2:
+        level = "Low"
+        recommendation = "Slots available — proceed."
+    elif share_open <= average_open * 0.5:
+        level = "High"
+        recommendation = "Parking full — try another area."
+    else:
+        level = "Moderate"
+        recommendation = "Some slots are open — proceed, and take the nearest empty bay."
+
+    return ParkingInsights(
+        total=total,
+        occupied=occupied,
+        available=empty,
+        occupancy_pct=round(occupancy, 1),
+        level=level,
+        recommendation=recommendation,
+    )
+
+
+ROW_BANDS: tuple[tuple[float, float], ...] = (
+    (0.000, 0.070),
+    (0.075, 0.150),
+    (0.160, 0.245),
+    (0.255, 0.340),
+    (0.360, 0.430),
+    (0.455, 0.540),
+    (0.555, 0.650),
+)
+LOWER_BAND = (0.692, 0.782)
+BOTTOM_BAND = (0.860, 0.970)
+X_START = 0.00
+X_STOP = 0.80
+LOWER_X_STOP = 0.78
+X_STEP = 0.05
+
+OCCUPIED_BELOW = 0.55
+LOWER_OCCUPIED_BELOW = 0.50
+BOTTOM_MATCH = 0.28
+BOTTOM_STD_MATCH = 0.55
+BOTTOM_STD = 38.0
+TEXTURE_RATIO = 4.5
+TEXTURE_MARGIN = 0.23
+
+REFERENCE_NAME = "lot-11.jpg"
+_ROW_COUNT = len(ROW_BANDS) + 2
+
+
+@dataclass(frozen=True)
+class LotReading:
+    slots: list[Slot]
+    same_camera: bool
+    aligned_bgr: np.ndarray
+    source: str = "camera"
+
+
+def _x_edges(width: int, x_stop: float) -> list[int]:
+    edges: list[float] = []
+    x = X_START
+    while x < x_stop - 1e-6:
+        edges.append(x)
+        x = round(x + X_STEP, 5)
+    edges.append(x_stop)
+    return [int(round(value * width)) for value in edges]
+
+
+def slot_boxes(width: int, height: int) -> list[tuple[int, int, int, int]]:
+    """Pixel boxes for every lined bay, left to right, top to bottom."""
+    boxes: list[tuple[int, int, int, int]] = []
+    spans = [((top, bottom), X_STOP) for top, bottom in ROW_BANDS]
+    spans.append((LOWER_BAND, LOWER_X_STOP))
+    spans.append((BOTTOM_BAND, LOWER_X_STOP))
+    for (y1, y2), x_stop in spans:
+        top = int(round(y1 * height))
+        bottom = int(round(y2 * height))
+        edges = _x_edges(width, x_stop)
+        for left, right in zip(edges, edges[1:]):
+            if right - left >= 2 and bottom - top >= 2:
+                boxes.append((left, top, right, bottom))
+    return boxes
+
+
+def _crop(image: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
+    x1, y1, x2, y2 = box
+    dx = max(1, (x2 - x1) // 10)
+    dy = max(1, (y2 - y1) // 8)
+    return image[y1 + dy : y2 - dy, x1 + dx : x2 - dx]
+
+
+def _correlation(image: np.ndarray, reference: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    current = _crop(image, box)
+    baseline = _crop(reference, box)
+    if current.size < 16 or current.shape != baseline.shape:
+        return 1.0
+    current = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+    baseline = cv2.cvtColor(baseline, cv2.COLOR_BGR2GRAY)
+    score = cv2.matchTemplate(current, baseline, cv2.TM_CCOEFF_NORMED)
+    return float(score[0, 0])
+
+
+def _laplacian(image: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    gray = cv2.cvtColor(_crop(image, box), cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_32F).var())
+
+
+def _texture_ratio(image: np.ndarray, reference: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    return _laplacian(image, box) / (_laplacian(reference, box) + 1.0)
+
+
+def _parked_on_plate(image: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    height, width = image.shape[:2]
+    x1, y1, x2, y2 = box
+    if x1 <= 1 or y1 <= 1 or x2 >= width - 1 or y2 >= height - 1:
+        return False
+    if _laplacian(image, box) < 140:
+        return False
+    gray = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    dark = (gray.astype(np.int16) < np.median(gray) - 18).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    if count <= 1:
+        return False
+    index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    area = stats[index, cv2.CC_STAT_AREA] / float(dark.size)
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    return (
+        area > 0.18
+        and stats[index, cv2.CC_STAT_WIDTH] / box_w > 0.45
+        and stats[index, cv2.CC_STAT_HEIGHT] / box_h > 0.45
+    )
+
+
+def _clear_parked_vehicles(plate: np.ndarray) -> np.ndarray:
+    boxes = slot_boxes(plate.shape[1], plate.shape[0])
+    if not boxes:
+        return plate
+    per_row = len(boxes) // _ROW_COUNT
+    energy = [_laplacian(plate, box) for box in boxes]
+    cleaned = plate.copy()
+    for index, box in enumerate(boxes):
+        if not _parked_on_plate(plate, box):
+            continue
+        row, col = divmod(index, per_row)
+        calm = float(np.median(energy[row * per_row : (row + 1) * per_row]))
+        donor = None
+        for other_col in range(per_row):
+            other = row * per_row + other_col
+            if other == index or energy[other] > calm * 1.4:
+                continue
+            distance = abs(other_col - col)
+            if donor is None or distance < donor[0]:
+                donor = (distance, other)
+        if donor is None:
+            continue
+        x1, y1, x2, y2 = box
+        sx1, sy1, sx2, sy2 = boxes[donor[1]]
+        patch = plate[sy1:sy2, sx1:sx2]
+        if patch.shape[0] != y2 - y1 or patch.shape[1] != x2 - x1:
+            patch = cv2.resize(patch, (x2 - x1, y2 - y1), interpolation=cv2.INTER_AREA)
+        cleaned[y1:y2, x1:x2] = patch
+    return cleaned
+
+
+def _grass_correlation(image: np.ndarray, reference: np.ndarray) -> float:
+    height, width = reference.shape[:2]
+    box = (
+        int(0.20 * width),
+        int(0.655 * height),
+        int(0.60 * width),
+        int(0.705 * height),
+    )
+    return _correlation(image, reference, box)
+
+
+def _prepare(gray: np.ndarray) -> np.ndarray:
+    return cv2.createCLAHE(3.0, (8, 8)).apply(gray)
+
+
+def _align_to_reference(image: np.ndarray, reference: np.ndarray) -> np.ndarray | None:
+    reference_max = max(reference.shape[:2])
+    image_max = max(image.shape[:2])
+    match_image = image
+    shrink = 1.0
+    if image_max > reference_max * 2:
+        shrink = (reference_max * 2) / float(image_max)
+        match_image = cv2.resize(
+            image,
+            (max(1, int(image.shape[1] * shrink)), max(1, int(image.shape[0] * shrink))),
+            interpolation=cv2.INTER_AREA,
+        )
+
+    gray_image = _prepare(cv2.cvtColor(match_image, cv2.COLOR_BGR2GRAY))
+    gray_reference = _prepare(cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY))
+    orb = cv2.ORB_create(8000, fastThreshold=8)
+    keys_image, desc_image = orb.detectAndCompute(gray_image, None)
+    keys_reference, desc_reference = orb.detectAndCompute(gray_reference, None)
+    if desc_image is None or desc_reference is None or len(keys_image) < 20 or len(keys_reference) < 20:
+        return None
+
+    matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
+    pairs = matcher.knnMatch(desc_image, desc_reference, k=2)
+    good = [m for m, n in pairs if len((m, n)) == 2 and m.distance < 0.75 * n.distance]
+    if len(good) < 12:
+        return None
+
+    source = np.float32([keys_image[match.queryIdx].pt for match in good])
+    destination = np.float32([keys_reference[match.trainIdx].pt for match in good])
+    homography, mask = cv2.findHomography(source, destination, cv2.RANSAC, 5.0)
+    if homography is not None and shrink != 1.0:
+        homography = homography @ np.array(
+            [[shrink, 0.0, 0.0], [0.0, shrink, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+    inliers = 0 if mask is None else int(mask.sum())
+    if homography is None or inliers < 12:
+        return None
+    if float(np.linalg.det(homography[:2, :2])) <= 0:
+        return None
+    scales = np.linalg.svd(homography[:2, :2], compute_uv=False)
+    if float(scales.min()) < 0.08 or float(scales.max()) > 12.0:
+        return None
+
+    height, width = reference.shape[:2]
+    warped = cv2.warpPerspective(
+        image,
+        homography,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    covered = np.count_nonzero(cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY) > 8) / float(height * width)
+    grass = _grass_correlation(warped, reference)
+    strong = inliers >= 28 and covered >= 0.18
+    weak = covered >= 0.45 and grass >= 0.18
+    if not (strong or weak):
+        return None
+    return warped
+
+
+def _registered(image: np.ndarray, reference: np.ndarray) -> bool:
+    if image.shape[:2] != reference.shape[:2]:
+        return False
+    return _grass_correlation(image, reference) >= 0.20
+
+
+def read_lot(image_bgr: np.ndarray, reference_bgr: np.ndarray, occupied_below: float = OCCUPIED_BELOW) -> LotReading:
+    matched = _registered(image_bgr, reference_bgr)
+    if not matched:
+        aligned = _align_to_reference(image_bgr, reference_bgr)
+        if aligned is None:
+            return LotReading(slots=[], same_camera=False, aligned_bgr=image_bgr)
+        image_bgr = aligned
+        matched = True
+    grass = _grass_correlation(image_bgr, reference_bgr)
+    boxes = slot_boxes(image_bgr.shape[1], image_bgr.shape[0])
+    height = image_bgr.shape[0]
+    lower_cut = int(0.68 * height)
+    bottom_cut = int(0.82 * height)
+    slots: list[Slot] = []
+    for box in boxes:
+        x1, y1, x2, y2 = box
+        bay = image_bgr[y1:y2, x1:x2]
+        if bay.size == 0:
+            continue
+        gray = cv2.cvtColor(bay, cv2.COLOR_BGR2GRAY)
+        covered = np.count_nonzero(gray > 8) / float(bay.shape[0] * bay.shape[1])
+        if covered < 0.65:
+            continue
+        match = _correlation(image_bgr, reference_bgr, box)
+        if y1 >= bottom_cut:
+            spread = float(gray.std())
+            occupied = match < BOTTOM_MATCH or (match < BOTTOM_STD_MATCH and spread > BOTTOM_STD)
+        else:
+            limit = min(occupied_below, LOWER_OCCUPIED_BELOW) if y1 >= lower_cut else occupied_below
+            soft_below = min(0.85, limit + TEXTURE_MARGIN)
+            busy = _texture_ratio(image_bgr, reference_bgr, box)
+            occupied = match < limit or (match < soft_below and busy > TEXTURE_RATIO)
+        confidence = (1.0 - match) if occupied else match
+        confidence = float(np.clip(confidence, 0.0, 0.99))
+        slots.append(
+            Slot(
+                status="occupied" if occupied else "empty",
+                confidence=confidence,
+                xyxy=box,
+            )
+        )
+    return LotReading(slots=slots, same_camera=matched or grass >= 0.20, aligned_bgr=image_bgr)
+
+
+def load_reference(samples_dir: Path) -> np.ndarray:
+    path = samples_dir / REFERENCE_NAME
+    image = cv2.imread(str(path))
+    if image is None:
+        raise FileNotFoundError(f"Empty-lot plate not found at {path}")
+    return _clear_parked_vehicles(image)
+
+
+_LINED_MIN_BAYS = 6
+
+
+def _segments(gray: np.ndarray) -> list[tuple[float, float, float, float, float, float]]:
+    raw = cv2.createLineSegmentDetector(0).detect(gray)[0]
+    if raw is None:
+        return []
+    found = []
+    for x1, y1, x2, y2 in raw.reshape(-1, 4):
+        dx, dy = float(x2 - x1), float(y2 - y1)
+        length = float(np.hypot(dx, dy))
+        if length < 16:
+            continue
+        angle = abs(np.degrees(np.arctan2(dy, dx)))
+        if angle > 90:
+            angle = 180 - angle
+        found.append((float(x1), float(y1), float(x2), float(y2), angle, length))
+    return found
+
+
+def _divider_weight(gray: np.ndarray, vertical: bool) -> float:
+    total = 0.0
+    for *_, angle, length in _segments(gray):
+        steep = angle >= 55
+        if steep == vertical and 16 <= length <= 120:
+            total += length
+    return total
+
+
+def _dividers(gray: np.ndarray) -> list[dict]:
+    divs = []
+    for x1, y1, x2, y2, angle, length in _segments(gray):
+        if length > 110 or angle < 55:
+            continue
+        divs.append(
+            {
+                "x": (x1 + x2) / 2,
+                "y": (y1 + y2) / 2,
+                "y1": min(y1, y2),
+                "y2": max(y1, y2),
+            }
+        )
+    return divs
+
+
+def _row_centers(divs: list[dict], height: int) -> list[float]:
+    if len(divs) < 8:
+        return []
+    ys = np.array([d["y"] for d in divs])
+    bins = np.arange(0, height + 8, 8)
+    hist, edges = np.histogram(ys, bins=bins)
+    smooth = np.convolve(hist.astype(float), np.ones(3) / 3, mode="same")
+    peaks = []
+    for index in range(1, len(smooth) - 1):
+        if smooth[index] >= smooth[index - 1] and smooth[index] >= smooth[index + 1] and hist[index] >= 5:
+            peaks.append(float((edges[index] + edges[index + 1]) / 2))
+    merged: list[float] = []
+    for peak in peaks:
+        if merged and peak - merged[-1] < 70:
+            merged[-1] = (merged[-1] + peak) / 2
+        else:
+            merged.append(peak)
+    return merged
+
+
+def _boxes_for_row(divs: list[dict], center: float, height: int, green: np.ndarray) -> list[tuple[int, int, int, int]]:
+    items = [d for d in divs if abs(d["y"] - center) < 48]
+    if len(items) < 6:
+        return []
+    items.sort(key=lambda d: d["x"])
+    cols: list[dict] = []
+    for item in items:
+        if cols and item["x"] - cols[-1]["x"] < 8:
+            col = cols[-1]
+            col["x"] = (col["x"] * col["n"] + item["x"]) / (col["n"] + 1)
+            col["n"] += 1
+        else:
+            cols.append({"x": item["x"], "n": 1})
+    gaps = np.diff([col["x"] for col in cols])
+    plausible = gaps[(gaps > 12) & (gaps < 70)]
+    if len(plausible) < 3:
+        return []
+    pitch = float(np.median(plausible))
+    half = int(pitch * 1.7)
+    y1, y2 = int(center - half), int(center + half)
+    boxes = []
+    for index in range(len(cols) - 1):
+        gap = cols[index + 1]["x"] - cols[index]["x"]
+        count = int(round(gap / pitch))
+        if not 1 <= count <= 2:
+            continue
+        step = gap / count
+        if step < pitch * 0.6 or step > pitch * 1.45:
+            continue
+        for slot_index in range(count):
+            left = cols[index]["x"] + step * slot_index
+            right = left + step
+            box = (
+                int(round(left)) + 2,
+                max(0, y1 + 2),
+                int(round(right)) - 2,
+                min(height - 1, y2 - 2),
+            )
+            if box[2] - box[0] < 8 or box[3] - box[1] < 14:
+                continue
+            patch = green[box[1] : box[3], box[0] : box[2]]
+            if patch.size and float(patch.mean()) > 0.22:
+                continue
+            boxes.append(box)
+    return boxes
+
+
+def _vehicle_fraction(image: np.ndarray, box: tuple[int, int, int, int], asphalt: float) -> float:
+    x1, y1, x2, y2 = box
+    dx = max(1, (x2 - x1) // 10)
+    dy = max(1, (y2 - y1) // 8)
+    crop = image[y1 + dy : y2 - dy, x1 + dx : x2 - dx]
+    if crop.size < 16:
+        return 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    span = max(3, min(9, (x2 - x1) // 3))
+    if span % 2 == 0:
+        span += 1
+    paint = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (span, span)))
+    differ = np.abs(gray.astype(np.int16) - asphalt) > 30
+    colored = hsv[:, :, 1] > 38
+    vehicle = (differ | colored) & (paint <= 20)
+    vehicle = cv2.morphologyEx(vehicle.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    return float(vehicle.mean())
+
+
+def _asphalt_level(image: np.ndarray, boxes: list[tuple[int, int, int, int]]) -> float:
+    spreads = []
+    for box in boxes:
+        gray = cv2.cvtColor(image[box[1] : box[3], box[0] : box[2]], cv2.COLOR_BGR2GRAY)
+        spreads.append(float(gray.std()))
+    if not spreads:
+        return 140.0
+    spreads = np.array(spreads)
+    calm = spreads <= np.percentile(spreads, 30)
+    levels = []
+    for box, quiet in zip(boxes, calm):
+        if not quiet:
+            continue
+        gray = cv2.cvtColor(image[box[1] : box[3], box[0] : box[2]], cv2.COLOR_BGR2GRAY)
+        levels.append(float(np.median(gray)))
+    return float(np.median(levels)) if levels else 140.0
+
+
+def _keep_runs(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    if not boxes:
+        return []
+    widths = [box[2] - box[0] for box in boxes]
+    gap_limit = float(np.median(widths)) * 2.4
+    rows: list[list[tuple[int, int, int, int]]] = []
+    for box in sorted(boxes, key=lambda item: (item[1] + item[3]) / 2):
+        center = (box[1] + box[3]) / 2
+        if rows and abs(center - np.mean([(item[1] + item[3]) / 2 for item in rows[-1]])) < 24:
+            rows[-1].append(box)
+        else:
+            rows.append([box])
+    kept = []
+    for row in rows:
+        row.sort(key=lambda item: item[0])
+        run = [row[0]]
+        runs = []
+        for box in row[1:]:
+            if box[0] - run[-1][2] > gap_limit:
+                runs.append(run)
+                run = [box]
+            else:
+                run.append(box)
+        runs.append(run)
+        for run in runs:
+            if len(run) >= 3:
+                kept.extend(run)
+    return kept
+
+
+def _slots_upright(image: np.ndarray) -> list[Slot]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    green = (hsv[:, :, 0] > 35) & (hsv[:, :, 0] < 95) & (hsv[:, :, 1] > 40)
+    divs = _dividers(gray)
+    boxes: list[tuple[int, int, int, int]] = []
+    for center in _row_centers(divs, image.shape[0]):
+        boxes.extend(_boxes_for_row(divs, center, image.shape[0], green))
+    boxes = _keep_runs(boxes)
+    if len(boxes) < _LINED_MIN_BAYS:
+        return []
+    asphalt = _asphalt_level(image, boxes)
+    slots = []
+    for box in boxes:
+        fraction = _vehicle_fraction(image, box, asphalt)
+        occupied = fraction > 0.18
+        slots.append(
+            Slot(
+                status="occupied" if occupied else "empty",
+                confidence=float(np.clip(fraction if occupied else 1.0 - fraction, 0.0, 0.99)),
+                xyxy=box,
+            )
+        )
+    return slots
+
+
+def _unmap_clockwise(box: tuple[int, int, int, int], height: int) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = box
+    corners = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
+    original = [(y, height - 1 - x) for x, y in corners]
+    xs = [point[0] for point in original]
+    ys = [point[1] for point in original]
+    return int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
+
+
+def _rotate_bound(image: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray]:
+    height, width = image.shape[:2]
+    center = (width / 2, height / 2)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    cosine, sine = abs(matrix[0, 0]), abs(matrix[0, 1])
+    bound_w = int(height * sine + width * cosine)
+    bound_h = int(height * cosine + width * sine)
+    matrix[0, 2] += bound_w / 2 - center[0]
+    matrix[1, 2] += bound_h / 2 - center[1]
+    warped = cv2.warpAffine(image, matrix, (bound_w, bound_h), flags=cv2.INTER_LINEAR)
+    return warped, matrix
+
+
+def _line_angle(dx: float, dy: float) -> float:
+    return float(np.degrees(np.arctan2(dy, dx)) % 180.0)
+
+
+def _angle_delta(a: float, b: float) -> float:
+    delta = abs(a - b) % 180.0
+    return min(delta, 180.0 - delta)
+
+
+def _ridge_strength(gray: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> float:
+    height, width = gray.shape
+    ang = np.arctan2(y2 - y1, x2 - x1)
+    nx, ny = -np.sin(ang), np.cos(ang)
+    scores = []
+    for t in (0.25, 0.5, 0.75):
+        mx = x1 + (x2 - x1) * t
+        my = y1 + (y2 - y1) * t
+        vals = []
+        for step in range(-6, 7):
+            x = int(round(mx + nx * step))
+            y = int(round(my + ny * step))
+            if not (0 <= x < width and 0 <= y < height):
+                vals = []
+                break
+            vals.append(int(gray[y, x]))
+        if len(vals) < 13:
+            continue
+        center = float(np.mean(vals[5:8]))
+        sides = 0.5 * (float(np.mean(vals[0:3])) + float(np.mean(vals[10:13])))
+        scores.append(center - sides)
+    if len(scores) < 2:
+        return -99.0
+    return float(np.median(scores))
+
+
+def _paint_segments(gray: np.ndarray):
+    kept = []
+    for x1, y1, x2, y2, _folded, length in _segments(gray):
+        if length < 20 or _ridge_strength(gray, x1, y1, x2, y2) < 5:
+            continue
+        kept.append((x1, y1, x2, y2, _line_angle(x2 - x1, y2 - y1), length))
+    return kept
+
+
+def _slant_peaks(gray: np.ndarray) -> list[float]:
+    hist = np.zeros(180, dtype=np.float64)
+    for *_, ang, length in _paint_segments(gray):
+        hist[int(ang) % 180] += length
+    smooth = np.convolve(hist, np.ones(9) / 9, mode="same")
+    for degree in range(180):
+        if _angle_delta(degree, 0) < 15 or _angle_delta(degree, 90) < 15:
+            smooth[degree] = 0
+    found = []
+    for degree in range(180):
+        if smooth[degree] < 180:
+            continue
+        if smooth[degree] >= smooth[(degree - 1) % 180] and smooth[degree] > smooth[(degree + 1) % 180]:
+            found.append((float(smooth[degree]), float(degree)))
+    found.sort(reverse=True)
+    kept: list[float] = []
+    for _weight, degree in found:
+        if all(_angle_delta(degree, other) > 18 for other in kept):
+            kept.append(degree)
+    return [degree for degree in kept[:4] if _angle_delta(degree, 0) >= 20 and _angle_delta(degree, 90) >= 20]
+
+
+def _quad_from_upright(inverse, cx, cy, half_w, half_l, shape):
+    height, width = shape[:2]
+
+    def original(x, y):
+        return (
+            inverse[0, 0] * x + inverse[0, 1] * y + inverse[0, 2],
+            inverse[1, 0] * x + inverse[1, 1] * y + inverse[1, 2],
+        )
+
+    center = original(cx, cy)
+    if not (6 < center[0] < width - 6 and 6 < center[1] < height - 6):
+        return None
+    corners = [original(cx + dx, cy + dy) for dx in (-half_w, half_w) for dy in (-half_l, half_l)]
+    order = np.argsort([np.arctan2(y - center[1], x - center[0]) for x, y in corners])
+    ordered = [corners[index] for index in order]
+    return tuple((int(round(np.clip(x, 0, width - 1))), int(round(np.clip(y, 0, height - 1)))) for x, y in ordered)
+
+
+def _foliage_fraction(hsv) -> float:
+    pixels = np.asarray(hsv).reshape(-1, 3)
+    if pixels.size == 0:
+        return 1.0
+    hue, sat = pixels[:, 0], pixels[:, 1]
+    return float(((hue >= 18) & (hue <= 48) & (sat > 70)).mean())
+
+
+def _core_sample(gray, hsv, probe, cx, cy, width, length):
+    half_w, half_l = width * 0.32, length * 0.32
+    x1, x2 = int(cx - half_w), int(cx + half_w)
+    y1, y2 = int(cy - half_l), int(cy + half_l)
+    height, width_px = gray.shape
+    if x1 < 2 or y1 < 2 or x2 >= width_px - 2 or y2 >= height - 2:
+        return None
+    return (
+        float(probe[y1:y2, x1:x2].mean()),
+        float(gray[y1:y2, x1:x2].std()),
+        _foliage_fraction(hsv[y1:y2, x1:x2]),
+        float(np.median(gray[y1:y2, x1:x2])),
+    )
+
+
+def _upright_vehicles(image, peak):
+    turned, matrix = _rotate_bound(image, 90 - peak)
+    inverse = np.linalg.inv(np.vstack([matrix, [0, 0, 1]]))[:2]
+    gray = cv2.cvtColor(turned, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(turned, cv2.COLOR_BGR2HSV)
+    scale = min(image.shape[:2]) / 960.0
+    span = 81 if scale >= 0.72 else (max(31, int(min(image.shape[:2]) * 0.1)) | 1)
+    if span % 2 == 0:
+        span += 1
+    area_lo = int(np.clip(450 * scale, 280, 520))
+    short_lo = float(np.clip(20 * scale, 14, 22))
+    long_lo = float(np.clip(48 * scale, 36, 52))
+    delta = gray.astype(np.int16) - cv2.medianBlur(gray, span).astype(np.int16)
+    probe = ((delta < -16) | (delta > 12)).astype(np.uint8)
+    blobs = []
+    for darker, limit in ((True, -24), (False, 18)):
+        mask = (delta < limit).astype(np.uint8) if darker else (delta > limit).astype(np.uint8)
+        opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        count, labels, _stats, _ = cv2.connectedComponentsWithStats(closed)
+        for index in range(1, count):
+            ys, xs = np.where(labels == index)
+            if not area_lo < len(xs) < 9500 or _foliage_fraction(hsv[ys, xs]) > 0.22:
+                continue
+            sample = np.stack([xs, ys], 1)
+            if len(sample) > 1100:
+                sample = sample[np.linspace(0, len(sample) - 1, 1100).astype(int)]
+            rect = cv2.minAreaRect(sample.astype(np.float32))
+            box = cv2.boxPoints(rect)
+            edges = []
+            for start, end in zip(box, np.roll(box, -1, 0)):
+                dx, dy = float(end[0] - start[0]), float(end[1] - start[1])
+                edges.append((float(np.hypot(dx, dy)), float(np.degrees(np.arctan2(dy, dx)) % 180)))
+            edges.sort(key=lambda edge: -edge[0])
+            long_edge, axis = edges[0]
+            short_edge = edges[2][0]
+            if short_edge < short_lo or long_edge < long_lo or long_edge > 180 or not 1.25 <= long_edge / max(short_edge, 1) <= 3.8:
+                continue
+            if _angle_delta(axis, 90) > 18:
+                continue
+            blobs.append([float(rect[0][0]), float(rect[0][1]), short_edge, long_edge, float(len(xs))])
+    blobs.sort(key=lambda blob: -blob[4])
+    kept = []
+    for blob in blobs:
+        if any(
+            abs(blob[0] - other[0]) < 0.65 * max(blob[2], other[2])
+            and abs(blob[1] - other[1]) < 0.5 * max(blob[3], other[3])
+            for other in kept
+        ):
+            continue
+        kept.append(blob)
+    return kept, inverse, gray, hsv, probe
+
+
+def _row_pitch_and_slopes(cars):
+    if len(cars) < 3:
+        return None
+    med_w = float(np.median([car[2] for car in cars]))
+    med_l = float(np.median([car[3] for car in cars]))
+    pairs = []
+    for index, car in enumerate(cars):
+        best = None
+        for other_index, other in enumerate(cars):
+            dx = other[0] - car[0]
+            if not (0.80 * med_w <= dx <= 2.5 * med_w):
+                continue
+            dy = other[1] - car[1]
+            if abs(dy) > 0.85 * dx or abs(dy) > 0.65 * med_l:
+                continue
+            if best is None or dx < best[0]:
+                best = (dx, dy, other_index)
+        if best is not None:
+            pairs.append((index, best[2], best[0], best[1] / best[0]))
+    pitch = float(np.median([pair[2] for pair in pairs])) if pairs else med_w * 1.45
+    slopes = np.array([pair[3] for pair in pairs]) if pairs else np.array([0.0])
+    centers = [float(np.median(slopes))]
+    return med_w, med_l, pitch, pairs, centers
+
+
+def _poly_iou(quad_a, quad_b) -> float:
+    area, _ = cv2.intersectConvexConvex(np.array(quad_a, np.float32), np.array(quad_b, np.float32))
+    if area <= 0:
+        return 0.0
+    union = cv2.contourArea(np.array(quad_a, np.float32)) + cv2.contourArea(np.array(quad_b, np.float32)) - area
+    return float(area) / float(max(1.0, union))
+
+
+def _asphalt_level_frame(image: np.ndarray) -> float:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    plain = gray[(hsv[:, :, 1] < 32) & (gray > 40) & (gray < 190)]
+    return float(np.median(plain)) if plain.size >= 40 else 140.0
+
+
+def _slant_car_slots(image: np.ndarray, peaks: list[float]) -> list[Slot]:
+    if not peaks:
+        return []
+    found: list[tuple] = []
+    for peak in peaks:
+        cars, inverse, gray, hsv, probe = _upright_vehicles(image, peak)
+        fitted = _row_pitch_and_slopes(cars)
+        if fitted is None:
+            continue
+        med_w, med_l, pitch, pairs, centers = fitted
+        asphalt = _asphalt_level_frame(image)
+        stall_l = float(np.clip(med_l, 38, med_l * 1.05))
+        stall_w = float(np.clip(min(med_w * 1.1, pitch * 0.82), med_w * 0.72, pitch * 0.88))
+        slope = centers[0]
+        
+        for car in cars:
+            stats = _core_sample(gray, hsv, probe, car[0], car[1], stall_w, stall_l)
+            if stats is None or stats[2] > 0.14 or stats[0] < 0.14:
+                continue
+            quad = _quad_from_upright(inverse, car[0], car[1], stall_w / 2, stall_l / 2, image.shape)
+            if quad is not None:
+                found.append((quad, False))
+                
+            for direction in (1, -1):
+                cx = car[0] + direction * pitch
+                cy = car[1] + direction * pitch * slope
+                if any(abs(cx - other[0]) < pitch * 0.42 and abs(cy - other[1]) < med_l * 0.42 for other in cars):
+                    continue
+                stats = _core_sample(gray, hsv, probe, cx, cy, stall_w, stall_l)
+                if stats is None or stats[2] > 0.08 or not (stats[0] <= 0.10 and stats[1] <= 18):
+                    continue
+                if abs(stats[3] - asphalt) > 26:
+                    continue
+                quad = _quad_from_upright(inverse, cx, cy, stall_w / 2, stall_l / 2, image.shape)
+                if quad is not None:
+                    found.append((quad, True))
+
+    found.sort(key=lambda item: item[1])
+    kept: list[tuple] = []
+    for quad, empty in found:
+        limit = 0.08 if empty else 0.20
+        if any(_poly_iou(quad, other[0]) > limit for other in kept):
+            continue
+        kept.append((quad, empty))
+
+    slots = []
+    for quad, empty in kept:
+        xs = [point[0] for point in quad]
+        ys = [point[1] for point in quad]
+        slots.append(
+            Slot(
+                status="empty" if empty else "occupied",
+                confidence=0.82 if empty else 0.86,
+                xyxy=(min(xs), min(ys), max(xs), max(ys)),
+                quad=quad,
+            )
+        )
+    return slots
+
+
+def read_lined(image_bgr: np.ndarray) -> tuple[list[Slot], np.ndarray]:
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    peaks = _slant_peaks(gray)
+    if peaks:
+        slanted = _slant_car_slots(image_bgr, peaks)
+        if len(slanted) >= _LINED_MIN_BAYS:
+            return slanted, image_bgr
+
+    vertical = _divider_weight(gray, vertical=True)
+    horizontal = _divider_weight(gray, vertical=False)
+    if horizontal > vertical * 1.25 and horizontal > 200:
+        turned = cv2.rotate(image_bgr, cv2.ROTATE_90_CLOCKWISE)
+        slots = _slots_upright(turned)
+        if len(slots) >= _LINED_MIN_BAYS:
+            height = image_bgr.shape[0]
+            mapped = [
+                Slot(slot.status, slot.confidence, _unmap_clockwise(slot.xyxy, height))
+                for slot in slots
+            ]
+            return mapped, image_bgr
+    return _slots_upright(image_bgr), image_bgr
+
+
+# Model paths supporting standard detection and oriented bounding boxes (OBB)
+MODEL_OBB_PATH = MODELS / "parking-yolov8n-obb.pt"
+MODEL_PATH = MODELS / "pklot-yolov8n.pt"
+_CONFIDENCE = 0.25
+_IMAGE_SIZE = 960
+_MODEL_MIN_BAYS = 4
+
+
+@lru_cache(maxsize=2)
+def load_model(obb: bool = False):
+    """Load parking-space weights (either oriented bounding box or standard PKLot)."""
+    target = MODEL_OBB_PATH if obb and MODEL_OBB_PATH.is_file() else MODEL_PATH
+    if not target.is_file():
+        return None
+    from ultralytics import YOLO
+    return YOLO(str(target))
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter == 0:
+        return 0.0
+    area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1, (bx2 - bx1) * (by2 - by1))
+    return inter / float(area_a + area_b - inter)
+
+
+def _dedupe(slots: list[Slot]) -> list[Slot]:
+    ordered = sorted(slots, key=lambda slot: slot.confidence, reverse=True)
+    kept: list[Slot] = []
+    for slot in ordered:
+        if any(_iou(slot.xyxy, other.xyxy) > 0.52 for other in kept):
+            continue
+        kept.append(slot)
+    return kept
+
+
+def _detect(image_bgr: np.ndarray) -> list[Slot]:
+    """Run model inference, parsing oriented bounding boxes (obb) when present."""
+    model = load_model(obb=True) or load_model(obb=False)
+    if model is None:
+        return []
+
+    result = model.predict(
+        image_bgr,
+        verbose=False,
+        conf=_CONFIDENCE,
+        iou=0.45,
+        imgsz=_IMAGE_SIZE,
+    )[0]
+    
+    names = result.names
+    height, width = image_bgr.shape[:2]
+    frame = float(height * width)
+    slots: list[Slot] = []
+
+    # Check for YOLO OBB (Oriented Bounding Boxes: xyxyxyxy)
+    if hasattr(result, "obb") and result.obb is not None and len(result.obb) > 0:
+        for obb in result.obb:
+            class_id = int(obb.cls[0])
+            status = slot_status(str(names[class_id]))
+            conf = float(obb.conf[0])
+            poly = obb.xyxyxyxy[0].cpu().numpy().astype(int)
+            quad = tuple((int(pt[0]), int(pt[1])) for pt in poly)
+            xs = [pt[0] for pt in quad]
+            ys = [pt[1] for pt in quad]
+            xyxy = (max(0, min(xs)), max(0, min(ys)), min(width - 1, max(xs)), min(height - 1, max(ys)))
+            slots.append(Slot(status=status, confidence=conf, xyxy=xyxy, quad=quad))
+        return _dedupe(slots)
+
+    if result.boxes is None:
+        return slots
+
+    for box in result.boxes:
+        class_id = int(box.cls[0])
+        status = slot_status(str(names[class_id]))
+        x1, y1, x2, y2 = (int(round(v)) for v in box.xyxy[0].tolist())
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width - 1, x2), min(height - 1, y2)
+        area = max(0, x2 - x1) * max(0, y2 - y1)
+        if area < frame * 0.00015 or area > frame * 0.035:
+            continue
+        if x2 - x1 < 6 or y2 - y1 < 6:
+            continue
+        slots.append(Slot(status=status, confidence=float(box.conf[0]), xyxy=(x1, y1, x2, y2)))
+        
+    return _dedupe(slots)
+
+
+def _orientations(image_bgr: np.ndarray):
+    yield image_bgr
+    yield cv2.rotate(image_bgr, cv2.ROTATE_180)
+    yield cv2.rotate(image_bgr, cv2.ROTATE_90_CLOCKWISE)
+    yield cv2.rotate(image_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+
+def read_overhead(image_bgr: np.ndarray) -> LotReading:
+    best_slots: list[Slot] = []
+    best_image = image_bgr
+    for view in _orientations(image_bgr):
+        slots = _detect(view)
+        if len(slots) > len(best_slots):
+            best_slots = slots
+            best_image = view
+        if len(slots) >= 15:
+            best_slots = slots
+            best_image = view
+            break
+
+    lined_slots, lined_image = read_lined(image_bgr)
+    if len(lined_slots) > len(best_slots) and len(lined_slots) >= _LINED_MIN_BAYS:
+        return LotReading(slots=lined_slots, same_camera=False, aligned_bgr=lined_image, source="lines")
+    if len(best_slots) >= _MODEL_MIN_BAYS:
+        return LotReading(slots=best_slots, same_camera=False, aligned_bgr=best_image, source="model")
+    if len(lined_slots) >= _MODEL_MIN_BAYS:
+        return LotReading(slots=lined_slots, same_camera=False, aligned_bgr=lined_image, source="lines")
+    return LotReading(slots=[], same_camera=False, aligned_bgr=image_bgr, source="lines")
+
+
+def list_samples() -> list[Path]:
+    if not SAMPLES.is_dir():
+        return []
+    return sorted(SAMPLES.glob("*.jpg")) + sorted(SAMPLES.glob("*.png"))
+
+
+@dataclass(frozen=True)
+class OpenAverage:
+    fraction: float
+    open_bays: float
+    frames: int
+
+
+@lru_cache(maxsize=1)
+def open_bay_average() -> OpenAverage:
+    paths = list_samples()
+    if not paths:
+        return OpenAverage(_FALLBACK_OPEN_FRACTION, 46.0, 0)
+    plate = load_reference(SAMPLES)
+    fractions: list[float] = []
+    opens: list[int] = []
+    for path in paths:
+        image = cv2.imread(str(path))
+        if image is None:
+            continue
+        occupied, empty = count_slots(read_lot(image, plate).slots)
+        total = occupied + empty
+        if total == 0:
+            continue
+        fractions.append(empty / total)
+        opens.append(empty)
+    if not fractions:
+        return OpenAverage(_FALLBACK_OPEN_FRACTION, 46.0, 0)
+    return OpenAverage(
+        fraction=sum(fractions) / len(fractions),
+        open_bays=sum(opens) / len(opens),
+        frames=len(fractions),
+    )
+
+
+def band_counts(total: int) -> tuple[int, int]:
+    average = open_bay_average().fraction
+    full_at = int(average * 0.5 * total)
+    free_line = average * 2 * total
+    free_at = int(free_line) if abs(free_line - round(free_line)) < 1e-6 else int(free_line) + 1
+    return full_at, free_at
+
+
+def read_rgb(file) -> np.ndarray:
+    return np.array(Image.open(file).convert("RGB"))
+
+
+def level_class(level: str) -> str:
+    return {"Low": "low", "Moderate": "moderate", "High": "high"}.get(level, "none")
+
+
+def cue_for(level: str) -> str | None:
+    return {"Low": "clear", "Moderate": "warning", "High": "alarm"}.get(level)
+
+
+def _silence(seconds: float) -> np.ndarray:
+    return np.zeros(int(_SAMPLE_RATE * seconds), dtype=np.float64)
+
+
+def _beep(frequency: float, seconds: float, volume: float, decay: float) -> np.ndarray:
+    count = max(1, int(_SAMPLE_RATE * seconds))
+    time = np.arange(count) / _SAMPLE_RATE
+    tone = np.sin(2 * np.pi * frequency * time)
+    tone += 0.22 * np.sin(2 * np.pi * frequency * 2 * time)
+    edge = min(int(0.012 * _SAMPLE_RATE), count // 4)
+    envelope = np.ones(count)
+    if edge:
+        envelope[:edge] = np.linspace(0.0, 1.0, edge)
+        envelope[-edge:] = np.linspace(1.0, 0.0, edge)
+    envelope *= np.exp(-decay * time / max(seconds, 0.05))
+    return tone * envelope * volume
+
+
+def _wav(samples: np.ndarray) -> bytes:
+    clipped = np.clip(samples, -1.0, 1.0)
+    pcm = (clipped * 32767).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(_SAMPLE_RATE)
+        handle.writeframes(pcm.tobytes())
+    return buffer.getvalue()
+
+
+@lru_cache(maxsize=3)
+def cue_audio(cue: str) -> bytes:
+    if cue == "alarm":
+        pattern = np.concatenate(
             [
-                "🎯 Smart Aerial Facility (Dedicated Stalls Only — Zero Road Clutter)",
-                "Car-by-Car Uniform Grid (6 Rows × 20 Cols — 120 Stalls)",
-                "Standard Medium Lot (3 Rows × 4 Cols — 12 Slots)",
-                "Custom Manual Grid",
-                "Single Focused Slot (1 × 1)",
-            ],
-            index=default_preset_idx,
-            horizontal=False,
-            help="Select an automated grid preset to immediately map individual car bays across large parking lots.",
+                _beep(880, 0.16, 0.55, decay=0.4),
+                _silence(0.06),
+                _beep(1175, 0.16, 0.55, decay=0.4),
+                _silence(0.12),
+            ]
         )
-    with mode_col:
-        mode = "Single slot crop" if "Single" in preset else "Full parking lot (grid)"
-        st.markdown(
-            f"""
-            <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; margin-top: 15px;">
-                <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase;">Detection Mode:</div>
-                <div style="font-size: 0.95rem; font-weight: 700; color: #38bdf8; margin-top: 2px;">{mode}</div>
-                <div style="font-size: 0.72rem; color: #64748b; margin-top: 4px;">Maps individual car bays across monitored zones.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        target = int(3.0 * _SAMPLE_RATE)
+        repeats = int(np.ceil(target / len(pattern)))
+        samples = np.tile(pattern, repeats)[:target]
+        fade = int(0.08 * _SAMPLE_RATE)
+        samples[-fade:] *= np.linspace(1.0, 0.0, fade)
+    elif cue == "warning":
+        samples = np.concatenate(
+            [
+                _beep(784, 0.14, 0.5, decay=2.2),
+                _silence(0.04),
+                _beep(523, 0.28, 0.5, decay=2.4),
+            ]
         )
-
-    # Determine default rows and cols based on preset
-    if "Smart Aerial Facility" in preset:
-        def_rows, def_cols = 5, 20
-        st.info("💡 **Smart Aerial Facility Active:** Complete facility monitored including Left Diagonal Wing (7 bays: D1-D7), 4 Main Aisles (76 bays: S1-S76), and Right Edge Bays (4 bays: E1-E4) for 87 total dedicated stalls. Driving lanes, roads, and crosswalks are automatically excluded.")
-    elif "6 Rows × 20 Cols" in preset:
-        def_rows, def_cols = 6, 20
-    elif "Single" in preset:
-        def_rows, def_cols = 1, 1
-    elif "Standard" in preset:
-        def_rows, def_cols = 3, 4
-    else:
-        def_rows = 6 if image.shape[1] > image.shape[0] * 1.4 else 3
-        def_cols = 20 if image.shape[1] > image.shape[0] * 1.4 else 4
-
-    if "Smart Aerial Facility" not in preset and "Single" not in preset:
-        c_rows, c_cols = st.columns(2)
-        with c_rows:
-            rows = st.slider("Vertical Bay Rows (Slots)", 1, 25, def_rows, help="Increase rows so each car bay receives its own slot.")
-        with c_cols:
-            cols = st.slider("Horizontal Bay Columns (Slots)", 1, 30, def_cols, help="Increase columns to match each car stall by stall.")
-    else:
-        rows, cols = def_rows, def_cols
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Process and classify grid cells (Cached)
-    results = []
-    with st.spinner("⚡ Running AI Optical Classification..."):
-        try:
-            results = classify_slots(model_info, image, mode, rows, cols, preset=preset)
-        except Exception as exc:
-            st.error(f"Analysis failed: {exc}")
-            trigger_audio("critical")
-            st.stop()
-
-    if not results:
-        st.error("Could not segment valid image regions.")
-        return
-
-    # Calculate metrics
-    insights = build_insights([result["label"] for result in results])
-
-    # Dynamic Pop-Up Toasts & Automated Audio Alarms
-    if insights["congestion"] == "High":
-        trigger_shaking_bell_alert()
-        st.toast(
-            f"🚨 CRITICAL ALERT: Facility at {insights['occupancy']:.1f}% capacity! Rerouting incoming vehicles.",
-            icon="🚨",
-        )
-    elif insights["congestion"] == "Moderate":
-        trigger_audio("available")
-        st.toast(
-            f"⚠️ MODERATE CONGESTION: {insights['available']} vacant spaces remaining ({insights['occupancy']:.1f}% full).",
-            icon="⚠️",
+    elif cue == "clear":
+        samples = np.concatenate(
+            [
+                _beep(523, 0.12, 0.45, decay=2.0),
+                _beep(659, 0.12, 0.45, decay=2.0),
+                _beep(784, 0.14, 0.48, decay=2.0),
+                _beep(1047, 0.32, 0.42, decay=2.6),
+            ]
         )
     else:
-        trigger_audio("available")
-        st.toast(
-            f"✅ OPTIMAL CLEARANCE: {insights['available']} vacant bays detected! Instant entry confirmed.",
-            icon="🟢",
-        )
+        raise ValueError(f"Unknown cue {cue}")
+    return _wav(samples)
 
-    # Congestion Status Banner
-    if insights["congestion"] == "High":
-        st.markdown(
-            f"""
-            <div class="alert-banner-high">
-                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                    <div style="display: flex; align-items: center; gap: 14px;">
-                        <span style="font-size: 2.2rem;">🚨</span>
-                        <div>
-                            <div style="font-size: 1.25rem; font-weight: 800; color: #fecaca; letter-spacing: 0.5px;">CRITICAL CONGESTION ALERT — {insights['occupancy']:.1f}% OCCUPIED</div>
-                            <div style="color: #fca5a5; font-size: 0.95rem; margin-top: 4px;">{insights['recommendation']}</div>
-                        </div>
-                    </div>
-                    <span class="telemetry-badge" style="background:#ef4444; color:white; font-size:0.8rem; font-weight:800;">DIVERSION PROTOCOL ENGAGED</span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    elif insights["congestion"] == "Moderate":
-        st.markdown(
-            f"""
-            <div class="alert-banner-moderate">
-                <div style="display: flex; align-items: center; gap: 14px;">
-                    <span style="font-size: 2.2rem;">⚠️</span>
-                    <div>
-                        <div style="font-size: 1.2rem; font-weight: 800; color: #fef3c7;">MODERATE OCCUPANCY — {insights['occupancy']:.1f}% OCCUPIED</div>
-                        <div style="color: #fde68a; font-size: 0.95rem; margin-top: 4px;">{insights['recommendation']}</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f"""
-            <div class="alert-banner-low">
-                <div style="display: flex; align-items: center; gap: 14px;">
-                    <span style="font-size: 2.2rem;">✅</span>
-                    <div>
-                        <div style="font-size: 1.2rem; font-weight: 800; color: #d1fae5;">OPTIMAL PARKING CAPACITY — {insights['available']} VACANT SPACES</div>
-                        <div style="color: #a7f3d0; font-size: 0.95rem; margin-top: 4px;">{insights['recommendation']}</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
-    # KPI Telemetry Cards
+def _play_cue(cue: str) -> None:
+    st.session_state.cue_play = st.session_state.get("cue_play", 0) + 1
+    encoded = base64.b64encode(cue_audio(cue)).decode("ascii")
+    st.markdown(
+        f'<audio autoplay playsinline id="parkvision-cue-{st.session_state.cue_play}" '
+        f'src="data:audio/wav;base64,{encoded}"></audio>',
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def reference():
+    return load_reference(SAMPLES)
+
+
+def _frame_label(name: str) -> str:
+    stem = Path(name).stem
+    if stem.startswith("lot-"):
+        return stem[4:]
+    return stem
+
+
+def _mosaic_html(slots: list[Slot]) -> str:
+    def center(slot: Slot) -> tuple[float, float]:
+        if slot.quad:
+            xs = [point[0] for point in slot.quad]
+            ys = [point[1] for point in slot.quad]
+            return (sum(ys) / len(ys), sum(xs) / len(xs))
+        x1, y1, x2, y2 = slot.xyxy
+        return ((y1 + y2) / 2, (x1 + x2) / 2)
+
+    cells = []
+    for slot in sorted(slots, key=center):
+        kind = "open" if slot.status == "empty" else "taken"
+        title = "Empty" if slot.status == "empty" else "Occupied"
+        cells.append(f'<span class="cell {kind}" title="{title}"></span>')
+    return (
+        '<div class="mosaic" aria-label="Bays from the top of the frame">'
+        + "".join(cells)
+        + "</div>"
+    )
+
+
+def _rail_html(insights: ParkingInsights, slots: list[Slot], full_at: int, free_at: int, usual_open: float) -> str:
+    tone = level_class(insights.level)
+    color = {"low": "#3ddc84", "moderate": "#e0a23a", "high": "#ff5d5d"}.get(tone, "#8ea0b5")
+    occupancy = max(0.0, min(100.0, insights.occupancy_pct))
+    span = max(insights.total, 1)
+    now = min(100.0, 100.0 * insights.available / span)
+    full_mark = min(100.0, 100.0 * full_at / span)
+    free_mark = min(100.0, 100.0 * free_at / span)
+    return f"""
+    <div class="rail {tone}">
+      <div class="rail-top">
+        <div class="ring" style="background: conic-gradient({color} {occupancy:.1f}%, rgba(232,238,246,0.08) 0);">
+          <div class="ring-hole">
+            <strong>{insights.occupancy_pct:.1f}%</strong>
+            <span>full</span>
+          </div>
+        </div>
+        <div class="verdict">
+          <p class="chip">{insights.level}</p>
+          <h2>{insights.available} open</h2>
+          <p class="say">{insights.recommendation}</p>
+        </div>
+      </div>
+      <div class="stats">
+        <div><span>Total</span><strong>{insights.total}</strong></div>
+        <div><span>Occupied</span><strong>{insights.occupied}</strong></div>
+        <div><span>Available</span><strong>{insights.available}</strong></div>
+        <div><span>Occupancy</span><strong>{insights.occupancy_pct:.1f}%</strong></div>
+      </div>
+      {_mosaic_html(slots)}
+      <p class="mosaic-note">Each square is one bay, from the top of the frame.</p>
+      <div class="band">
+        <div class="band-track">
+          <div class="band-now" style="left:{now:.1f}%"></div>
+          <div class="band-tick" style="left:{full_mark:.1f}%"></div>
+          <div class="band-tick free" style="left:{free_mark:.1f}%"></div>
+        </div>
+        <div class="band-labels">
+          <span>Full at {full_at}</span>
+          <span>{insights.available} open now</span>
+          <span>Free at {free_at}</span>
+        </div>
+      </div>
+      <p class="usual">A normal frame of the sample camera leaves {usual_open:.0f} bays open. The sound for this band plays on its own.</p>
+    </div>
+    """
+
+
+_PAGE_CSS = """
+<style>
+  html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+    background: #090c11;
+    color: #e8eef6;
+    font-family: Inter, "Segoe UI", sans-serif;
+  }
+  header[data-testid="stHeader"],
+  [data-testid="stToolbar"],
+  [data-testid="stDecoration"],
+  [data-testid="stStatusWidget"] {
+    display: none !important;
+    height: 0 !important;
+  }
+  #MainMenu, footer { visibility: hidden; height: 0; }
+  .block-container {
+    max-width: 1180px;
+    padding-top: 1.15rem;
+    padding-bottom: 2.6rem;
+  }
+  .brand { display: flex; align-items: center; gap: 0.85rem; margin: 0 0 0.35rem; }
+  .brand img { width: 3.1rem; height: 3.1rem; border-radius: 0.8rem; }
+  .brand .eyebrow {
+    margin: 0;
+    color: #8fb4ff;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+  }
+  .brand h1 { margin: 0; font-size: 1.55rem; letter-spacing: -0.03em; line-height: 1.1; }
+  .lede { color: #9aabbe; margin: 0 0 0.85rem; max-width: 40rem; font-size: 0.95rem; }
+  .st-key-stage, .st-key-railbox {
+    background: #12181f;
+    border: 1px solid rgba(232, 238, 246, 0.08);
+    border-radius: 18px;
+    padding: 0.85rem 0.9rem 0.35rem;
+  }
+  .view-label {
+    margin: 0 0 0.45rem;
+    color: #8ea0b5;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  [data-testid="stImage"] img {
+    border-radius: 12px;
+    border: 1px solid rgba(232, 238, 246, 0.08);
+  }
+  .legend { display: flex; gap: 0.9rem; color: #c5d0de; font-size: 0.82rem; margin: 0.15rem 0 0.2rem; }
+  .swatch {
+    display: inline-block; width: 0.7rem; height: 0.7rem;
+    border-radius: 2px; margin-right: 0.35rem; vertical-align: -1px;
+  }
+  .rail { display: flex; flex-direction: column; gap: 0.85rem; }
+  .rail-top { display: flex; gap: 0.9rem; align-items: center; }
+  .ring {
+    width: 148px; height: 148px; border-radius: 50%;
+    display: grid; place-items: center; flex: none;
+  }
+  .ring-hole {
+    width: 108px; height: 108px; border-radius: 50%;
+    background: #12181f;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .ring-hole strong {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 1.35rem; letter-spacing: -0.04em; line-height: 1;
+  }
+  .ring-hole span { color: #8ea0b5; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .chip {
+    display: inline-block; margin: 0 0 0.25rem;
+    padding: 0.12rem 0.45rem; border-radius: 999px;
+    font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase;
+    border: 1px solid transparent;
+  }
+  .low .chip { color: #3ddc84; border-color: rgba(61, 220, 132, 0.45); background: rgba(61, 220, 132, 0.1); }
+  .moderate .chip { color: #e0a23a; border-color: rgba(224, 162, 58, 0.45); background: rgba(224, 162, 58, 0.1); }
+  .high .chip { color: #ff5d5d; border-color: rgba(255, 93, 93, 0.5); background: rgba(255, 93, 93, 0.1); }
+  .none .chip { color: #8ea0b5; border-color: rgba(142, 160, 181, 0.4); }
+  .verdict h2 {
+    margin: 0; font-size: 1.85rem; letter-spacing: -0.04em; line-height: 1;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+  }
+  .verdict .say { margin: 0.4rem 0 0; color: #d5deea; font-size: 0.95rem; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.45rem; }
+  .stats div {
+    background: rgba(232, 238, 246, 0.04);
+    border-radius: 10px; padding: 0.45rem 0.5rem 0.4rem;
+  }
+  .stats span { display: block; color: #8ea0b5; font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  .stats strong {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 1.15rem; font-weight: 560;
+  }
+  .mosaic { display: flex; flex-wrap: wrap; gap: 3px; }
+  .cell { width: 12px; height: 16px; border-radius: 2px; display: inline-block; }
+  .cell.open { background: #3ddc84; }
+  .cell.taken { background: #ff5d5d; }
+  .mosaic-note, .usual, .fineprint { color: #8ea0b5; font-size: 0.8rem; margin: 0; }
+  .band-track {
+    position: relative; height: 6px; border-radius: 999px;
+    background: rgba(232, 238, 246, 0.1); margin: 0.2rem 0 0.35rem;
+  }
+  .band-now {
+    position: absolute; top: -4px; width: 14px; height: 14px; border-radius: 50%;
+    background: #e8eef6; transform: translateX(-50%);
+    box-shadow: 0 0 0 3px rgba(232, 238, 246, 0.16);
+  }
+  .low .band-now { background: #3ddc84; }
+  .moderate .band-now { background: #e0a23a; }
+  .high .band-now { background: #ff5d5d; }
+  .band-tick {
+    position: absolute; top: -2px; width: 2px; height: 10px;
+    background: rgba(232, 238, 246, 0.45); transform: translateX(-50%);
+  }
+  .band-labels { display: flex; justify-content: space-between; gap: 0.4rem; color: #8ea0b5; font-size: 0.72rem; }
+  .empty-stage {
+    border: 1px dashed rgba(143, 180, 255, 0.35);
+    border-radius: 18px; padding: 2.2rem 1.4rem; text-align: center;
+    background: #10161e;
+  }
+  .empty-stage h2 { margin: 0.4rem 0 0.3rem; font-size: 1.25rem; }
+  .empty-stage p { margin: 0 auto; max-width: 34rem; color: #9aabbe; }
+  [data-testid="stFileUploaderDropzone"] {
+    background: #10161e;
+    border: 1px dashed rgba(143, 180, 255, 0.45);
+    border-radius: 16px;
+  }
+  .cue { height: 0; overflow: hidden; }
+  @media (max-width: 720px) {
+    .rail-top { flex-direction: column; align-items: flex-start; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .brand h1 { font-size: 1.3rem; }
+    .verdict h2 { font-size: 1.55rem; }
+  }
+</style>
+"""
+
+_LOGO_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAKF0lEQVR4nO3dP4sdVRjH8UexCQHZQIqAEFJYLKRI"
+    "Kqu8ELu8Am1TWFuk1VeQzhdiZZUUgS0sQkCwELIIwVKro+Nl7947M895/n4/nUT2nnPv+f3mzNzZWREAAAAAAAAA"
+    "AAAAAAAAAJDXJ94D8PD5/S/+9h4DYvrzj99aZaL0ZAk6tFQthnKTIvSYrVIZlJgIoYeX7GWQdvCEHtFkLIN0Ayb4"
+    "iC5TEaQZKMFHNhmKIPwACT6yi1wEYQc2M/hPXryf9aOR3JuXD6f97IhFEG5AIrrhJ+zYS7MUopVAqMFoBZ/QYxat"
+    "MohSBCEGIbI//IQe1vaWQYQScB+AyL7wE3x421ME3iXg+uIEH5VkLAK3AtgafoKP6LYWgUcJuBTAlvATfGSzpQis"
+    "S+BTyxcTIfzoY8u6tb7xzbRt1k6O4KOKtbsBq52AWQFEC//MO76QU7Q1Z1ECJgUQIfwEHmtFWIezS2B6AawJv+Yb"
+    "TuChzWt9ziyBqQXgEX6Cj9k81uqsEghRABpvKMGHNct1m64ArMJP8OHNag3PKIEpBWARfoKPaCzWs3YJqN8IRPjR"
+    "1Z51eW4etG8UMr8TcC/Cj8iyrU/V7cTMo3+2NxaYuc61TgXUdgCEH/i/LevW+lTA9BSA8KObmSWgQaUAZv0GE+FH"
+    "BbPWsUbuzHYAa1uN8KOStevZahewuwDOaSHCD8wpgb27gHRfAwLQs6sAOPoD60TbBYTaARB+dBBpnW8uAO2jf6Q3"
+    "BZhtzXqfuQsItQMAYGtaAXD0B26nvQvYYlMBWD+6GMBpW3I5ZQfA0R84j/cugGsAQGOrC0Bz+8/RH9DNwdp8qu8A"
+    "+Gs+wDza+XI7BeDoD/zHKw+rCoCr/0B8a3KqugNg+w/Mp5kzvgUAGvvM40U9z//vXDxwe23k8Nf17y6v++blQ/Nd"
+    "tEsBWCP0WGO5XrzKwErpAiD42GusoapFcPY1gFNXFqNdACT80BRtPZ3K27nfBJhfBLQ4/4/2YaEGi3VlfX2s3LcA"
+    "hB8zVVtfpQqg2oeDmCqtszIFUOlDQXxV1luJAqjyYSCXCusufQFU+BCQV/b1l74AAGyXugCyty9qyLwOS98JiNu9"
+    "/uXn//3306+eOY0EXlLvAADsk7YAMm+7UE/W9Zi2AADsxzWAhbuvHnsPYbOPz9+av+bVo3vmr6nl8t0H7yGEQAFI"
+    "7uAPYw4WRZA5+MOYQ/ciaF0AFYJ/aGYRVAj+oe5F0PYaQMXwL2nPr2L4l6rP75iWBVA9/IPWPLuEo8s8l9oVQJfw"
+    "D3vn2y0U3ebb+hrATa6/f+09hNUuvnvq9trfXP3q9tpb/Xj5pfcQwmhVALcdDTMGfxhjP1YEd1893nRR8LajYcbg"
+    "D2Psx4rg6tG9NhcF250C3CRz+Jes5pE5/EtV5rFHmwLodu5/aO38u50LH+oy/zYFcEyVo/8wez7VjprV5rNW+wIA"
+    "OqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKCxVr8ODB+Wv3/f/d7+tSgATOPx4I3xmhTBeTgF"
+    "wBTeT93xfv0sKACoixK+KOOIjAKAqmihizaeaCgAqIkatqjjioACABqjAKAi+lE2+vi8UABAYxQA0BgFADRGAQCN"
+    "cSswzF389IPaz7r++lu1n9URBQAzmsE//JkUwTacAgCNUQAwMePob/nzq6IAgMYoAKAxCgBojAIAGqMAgMYoAKAx"
+    "CgBojAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgAmZj+wgweCbEMBAI3xSDCYGUdpngkYBwUAc4Q2Dk4BgMYo"
+    "AKAxCgBojAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgBo"
+    "jAIAGqMAgMYoAKAxCgBojAIAGqMAgMYoAKAxCgBojAIAGqMAoOKbq1+9h3Cr6OPzQgEAjVEAUBP1KBt1XBFQAFAV"
+    "LWzRxhMNBQB1UUIXZRyRUQCYwjt83q+fxWfeA0BdI4Q/Xn5p/po4DwWA6QhlXJwCAI1RAEBjFADQGAUANEYBAI1R"
+    "AEBjFADQWPsCuPjuqfcQVM2ej+VNPRaqzWetNgXw8flb7yG4Wjv/y3cfJo0khy7zb1MAt6myC7CaR5WjZpV57NHq"
+    "VuCPz9/K3VePb/y3EZ7r71/bDUjJqeBv3f1cvvsgV4/u3fhvIzwZb/M9FfwuR3+RZgVwjiq7ASscRXNrdwrQ7VrA"
+    "3vl2OhqK9JtvuwIQ6VMCWvPsEoou81xqWQAi9UtAe37Vw1F9fse0vgYwQnLswmBGM4tthOTYhcGMugZ/aF0AQ4Ui"
+    "sNzRVCiC7sEfKICF6qcF2ghRfm2vAQBIXAB/Xf/uPQTgX1nXY9oCALAf1wAae/rVM+8hwFnqHUDWbRdqybwOUxcA"
+    "gH3SF0Dm9kV+2ddf+gIQyf8hIKcK665EAYjU+DCQR5X1VqYAROp8KIit0jorVQAitT4cxFNtfZkXwJMX76e/RrUP"
+    "CTFYrCuLfCydXQB//vHbJ7f9+5uXD/ePRhElAE3R1tOpvJ3K61D6TsDxod25eOA8EmQVLfjaShfAsPwQKQOcUj30"
+    "Sy4F8OTFe7dThk4fLnKxPv8XKfgtAIDzqRZAtAuBQEWaOVtVAOdeWQTgZ01O3U4BPM53gKi88qBeAJwGAPNo52t1"
+    "AWieBrALAHRzsDaffAsANDalANZsU9gFoLM163/G6fWmAuDbACCeLbmcdgrALgC4nffRX4RrAEBrmwvgnO0GuwDg"
+    "ZtpH/62n5aF2AJQAOoi0zncVgPYuQCTWmwNoW7u+Zx79RYLtAADY2l0A7AKA80Q7+osY7gAoAXQ2I/waVApg1o1B"
+    "lAAqmLWONXJneg1gS6tRAshsy/q1/I1atQI4t40oAXQxM/xau271rfvn97/4+5z/b2uoed4Aopu9tjVPudN9Dchu"
+    "AJFlW5/qBTDzVGDI9iajhz3r0uPoLzLhFGCYfSowcEoAb1ZreMa3bVN/r9+qBEQoAtizXLezvmoPUQAiett6igCz"
+    "eazVlAUg4lMCIhQB9Hmtz5lP4DJ5tNeaEhCZc5GPQsBaEdbh7MfvmT3bL0IJLFEIOBRtzVk8e9P04Z7RSgCwEjH8"
+    "IsYFILK+BEQoAuS1Zadp+dRt8zsBt0yO7Toyih5+EYcdwLBlJyDCbgDxbT1gefy9Ddc/8LG1BEQoAsSzZ6fq9cd2"
+    "QvyFH4oAmWUM/hCiAET2lYAIRQB7e69NeYdfJFABiOwvgYEywCxaF6QjhF8kWAEMWkUgQhlgP81voaIEfwg1mCXN"
+    "EjhEKeCYmV85Rwu/SOACGGYWAWAhYvCHsAM7RBEgm8jBH8IP8BBFgOgyBH9IM9BDFAGiyRT8Id2Ab0IZwEvG0C+l"
+    "HvxNKAPMlj30S2UmchPKAFoqhX6p5KROoRhwTNWgAwAAAAAAAAAAAAAAACjsH6AIkg0DxL4CAAAAAElFTkSuQmCC"
+)
+
+
+def _logo_bytes() -> bytes:
+    path = ROOT / "assets" / "logo.png"
+    if path.is_file():
+        return path.read_bytes()
+    return base64.b64decode(_LOGO_PNG)
+
+
+def main() -> None:
+    logo = _logo_bytes()
+    icon_path = ROOT / "assets" / "logo.png"
+    st.set_page_config(
+        page_title="ParkVision AI",
+        page_icon=str(icon_path) if icon_path.is_file() else Image.open(io.BytesIO(logo)),
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+    st.markdown(_PAGE_CSS, unsafe_allow_html=True)
+
+    mark = base64.b64encode(logo).decode("ascii")
     st.markdown(
         f"""
-        <div class="kpi-grid">
-            <div class="kpi-card">
-                <div class="kpi-title">🅿️ Total Slots</div>
-                <div class="kpi-value" style="color: #38bdf8;">{insights['total']}</div>
-                <div class="kpi-caption">Monitored parking spaces</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-title">🟢 Available Slots</div>
-                <div class="kpi-value" style="color: #34d399;">{insights['available']}</div>
-                <div class="kpi-caption">Ready for incoming vehicles</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-title">🔴 Occupied Slots</div>
-                <div class="kpi-value" style="color: #f87171;">{insights['occupied']}</div>
-                <div class="kpi-caption">Vehicles currently parked</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-title">📊 Occupancy Rate</div>
-                <div class="kpi-value" style="color: {'#f87171' if insights['occupancy'] > 75 else ('#f59e0b' if insights['occupancy'] >= 40 else '#34d399')};">{insights['occupancy']:.1f}%</div>
-                <div class="kpi-caption">Congestion Level: {insights['congestion']}</div>
-            </div>
+        <div class="brand">
+          <img src="data:image/png;base64,{mark}" alt="ParkVision">
+          <div>
+            <p class="eyebrow">Overhead lot reading</p>
+            <h1>ParkVision AI</h1>
+          </div>
         </div>
+        <p class="lede">
+          An overhead shot of a lined lot. Empty bays are green, occupied bays
+          are red, and the call tells a driver whether to pull in.
+        </p>
         """,
         unsafe_allow_html=True,
     )
 
-    # Annotated Image Display & Interactive Digital Space Matrix
-    col_img, col_matrix = st.columns([3, 2])
-
-    with col_img:
-        st.markdown(
-            '<div class="park-glass-card">'
-            '<h3 style="color:#38bdf8; margin:0 0 12px 0;">📷 Real-Time Optical Detection</h3>',
-            unsafe_allow_html=True,
+    samples = list_samples()
+    source_options = ["Sample lot", "Upload"] if samples else ["Upload"]
+    with st.container(key="controls"):
+        source = st.segmented_control(
+            "Frame",
+            source_options,
+            default=source_options[0],
+            selection_mode="single",
+            key="source_mode",
         )
-        annotated_image = draw_annotations(image, results)
-        st.image(annotated_image, use_container_width=True)
-        st.markdown(
-            '<div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#94a3b8; margin-top:8px;">'
-            '<span>🟢 Green = Empty / Available</span>'
-            '<span>🔴 Red = Occupied</span>'
-            '</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    with col_matrix:
-        st.markdown(
-            '<div class="park-glass-card">'
-            '<h3 style="color:#818cf8; margin:0 0 12px 0;">🗺️ Digital Space Matrix</h3>',
-            unsafe_allow_html=True,
-        )
-
-        # Interactive filter
-        filter_mode = st.radio(
-            "Filter spaces:",
-            ["All Slots", "Available Only (🟢)", "Occupied Only (🔴)"],
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-
-        filtered_results = results
-        if filter_mode == "Available Only (🟢)":
-            filtered_results = [r for r in results if r["label"] == "empty"]
-        elif filter_mode == "Occupied Only (🔴)":
-            filtered_results = [r for r in results if r["label"] == "occupied"]
-
-        chips_html = '<div style="max-height: 380px; overflow-y: auto; padding-right: 6px;">'
-        if not filtered_results:
-            chips_html += '<div style="color: #64748b; padding: 20px; text-align: center;">No slots match the active filter.</div>'
-        else:
-            for r in filtered_results:
-                is_occ = (r["label"] == "occupied")
-                css_cls = "slot-occupied" if is_occ else "slot-empty"
-                icon = "🔴" if is_occ else "🟢"
-                conf_str = f"{r['confidence']:.0%}" if r["confidence"] is not None else "Est"
-                tag = r.get("name", f"S{r['id']}")
-                sec_sub = r.get("section", f"R{r['row']}:C{r['col']}")
-                chips_html += f'<div class="slot-chip {css_cls}"><span>{icon} <b>{tag}</b> ({sec_sub})</span><span style="opacity:0.85;">{conf_str}</span></div>'
-        chips_html += '</div></div>'
-        st.markdown(chips_html, unsafe_allow_html=True)
-
-    # --------------------------------------------------
-    # ACTIVE VEHICLE PARKING DIRECTORY (Live Section Breakdown)
-    # --------------------------------------------------
-    occupied_slots = [r for r in results if r["label"] == "occupied"]
-    empty_slots = [r for r in results if r["label"] == "empty"]
-    rows_present = sorted(list(set(r["row"] for r in results)))
-
-    st.markdown(
-        """
-        <div class="park-glass-card" style="margin-top: 18px; padding: 20px 24px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
-                <div style="font-size: 1.15rem; font-weight: 800; color: #38bdf8;">
-                    📍 Real-Time Parking Space Directory (Where Each Car Is Parked)
-                </div>
-                <div style="font-size: 0.82rem; color: #94a3b8;">
-                    Section-by-section breakdown identifying active vehicle positions vs. open spaces
-                </div>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    col_occ_dir, col_emp_dir = st.columns([1, 1])
-    with col_occ_dir:
-        st.markdown(
-            f"""
-            <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 10px; padding: 14px; margin-bottom: 10px;">
-                <div style="font-size: 0.95rem; font-weight: 700; color: #f87171; margin-bottom: 8px;">
-                    🚘 Occupied Sections ({len(occupied_slots)} Vehicles Parked):
-                </div>
-                <div style="font-size: 0.85rem; color: #e2e8f0; line-height: 1.7; max-height: 240px; overflow-y: auto;">
-            """,
-            unsafe_allow_html=True,
-        )
-        if not occupied_slots:
-            st.markdown("<div style='color: #94a3b8;'>No vehicles detected. Facility is empty.</div>", unsafe_allow_html=True)
-        else:
-            for r_idx in rows_present:
-                row_occ = [r for r in occupied_slots if r["row"] == r_idx]
-                if row_occ:
-                    ids_str = ", ".join(f"<b style='color:#f87171;'>{r.get('name', 'S' + str(r['id']))}</b>" for r in row_occ)
-                    aisle_name = row_occ[0].get("row_name", f"Aisle {r_idx}")
-                    st.markdown(
-                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>{aisle_name}:</span> {ids_str}</div>",
-                        unsafe_allow_html=True,
-                    )
-        st.markdown("</div></div>", unsafe_allow_html=True)
-
-    with col_emp_dir:
-        st.markdown(
-            f"""
-            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 14px; margin-bottom: 10px;">
-                <div style="font-size: 0.95rem; font-weight: 700; color: #34d399; margin-bottom: 8px;">
-                    🟢 Available Free Sections ({len(empty_slots)} Ready to Park):
-                </div>
-                <div style="font-size: 0.85rem; color: #e2e8f0; line-height: 1.7; max-height: 240px; overflow-y: auto;">
-            """,
-            unsafe_allow_html=True,
-        )
-        if not empty_slots:
-            st.markdown("<div style='color: #fca5a5;'>All monitored bays are currently occupied. Reroute incoming traffic.</div>", unsafe_allow_html=True)
-        else:
-            for r_idx in rows_present:
-                row_emp = [r for r in empty_slots if r["row"] == r_idx]
-                if row_emp:
-                    ids_str = ", ".join(f"<b style='color:#34d399;'>{r.get('name', 'S' + str(r['id']))}</b>" for r in row_emp)
-                    aisle_name = row_emp[0].get("row_name", f"Aisle {r_idx}")
-                    st.markdown(
-                        f"<div style='margin-bottom: 4px;'><span style='color: #94a3b8; font-weight:600;'>{aisle_name}:</span> {ids_str}</div>",
-                        unsafe_allow_html=True,
-                    )
-        st.markdown("</div></div>", unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # --------------------------------------------------
-    # VISUAL SURVEILLANCE ANALYTICS & GRAPHS
-    # --------------------------------------------------
-    st.markdown("---")
-    st.markdown("### 📊 Surveillance Analytics & Intelligence Visualizations")
-
-    tab_thermo, tab_line, tab_dist, tab_rubric = st.tabs([
-        "🌡️ Spatial Thermograph (Heatmap)",
-        "📈 Daily Occupancy Line Graph",
-        "📊 Detection Distribution",
-        "🔬 Confusion Matrix & Rubric Artifacts",
-    ])
-
-    with tab_thermo:
-        st.markdown(
-            """
-            <div class="park-glass-card">
-                <h4 style="color:#38bdf8; margin:0 0 6px 0;">🌡️ Spatial Thermograph — Occupancy Density Heatmap</h4>
-                <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:15px;">
-                    Thermal density rendering of the monitored parking facility. Hot red/yellow zones represent occupied bays; cool purple/black indicates vacant spaces.
-                </p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if mode == "Full parking lot (grid)":
-            grid_matrix = np.zeros((rows, cols), dtype=np.float32)
-            for r in results:
-                row_idx = min(rows - 1, r["row"])
-                col_idx = min(cols - 1, r["col"])
-                conf = r["confidence"] if r["confidence"] is not None else 0.85
-                prob = conf if r["label"] == "occupied" else (1.0 - conf)
-                grid_matrix[row_idx, col_idx] = prob
-
-            fig_t, ax_t = plt.subplots(figsize=(7, 3.4), facecolor="#0b1324")
-            ax_t.set_facecolor("#0b1324")
-            sns.heatmap(
-                grid_matrix,
-                cmap="turbo",
-                annot=True,
-                fmt=".0%",
-                ax=ax_t,
-                linewidths=1.5,
-                linecolor="#1e293b",
-                vmin=0,
-                vmax=1,
-                cbar_kws={"label": "Occupancy Probability (Hot = Occupied)"},
+        upload = None
+        sample_path = None
+        if source == "Upload":
+            upload = st.file_uploader(
+                "Overhead photo",
+                type=["jpg", "jpeg", "png", "webp"],
+                help="An overhead photo of a lined parking lot. It does not have to be the sample camera.",
             )
-            ax_t.set_title("THERMAL OCCUPANCY INTENSITY MATRIX", color="#38bdf8", fontsize=10, fontweight="bold", pad=10)
-            ax_t.set_xlabel("Parking Bay Column", color="#94a3b8", fontsize=9)
-            ax_t.set_ylabel("Parking Bay Row", color="#94a3b8", fontsize=9)
-            ax_t.tick_params(colors="#94a3b8")
-            
-            cbar = ax_t.collections[0].colorbar
-            cbar.ax.yaxis.label.set_color("#94a3b8")
-            cbar.ax.tick_params(colors="#94a3b8")
-            plt.tight_layout()
-            st.pyplot(fig_t)
-            plt.close(fig_t)
-        else:
-            st.info("Thermograph mapping requires 'Full parking lot (grid)' detection mode.")
+        elif samples and source == "Sample lot":
+            labels = [path.name for path in samples]
+            default = "lot-01.jpg" if "lot-01.jpg" in labels else labels[0]
+            choice = st.pills(
+                "Saved frames",
+                labels,
+                default=default,
+                format_func=_frame_label,
+                selection_mode="single",
+                key="frame",
+            )
+            if choice:
+                sample_path = samples[labels.index(choice)]
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    image = None
+    if upload is not None:
+        image = read_rgb(upload)
+    elif sample_path is not None:
+        image = read_rgb(sample_path)
 
-    with tab_line:
-        st.markdown(
-            """
-            <div class="park-glass-card">
-                <h4 style="color:#818cf8; margin:0 0 6px 0;">📈 24-Hour Facility Utilization Curve</h4>
-                <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:15px;">
-                    Temporal tracking comparing simulated baseline traffic curves with the current live occupancy and the 75% critical threshold.
-                </p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        hours = ["06:00", "08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"]
-        base_curve = [15.0, 42.0, 68.0, 82.0, 78.0, 88.0, 62.0, 35.0, 18.0]
-        curr_occ = insights["occupancy"]
-        scaled_curve = [min(100.0, max(0.0, round(v * (curr_occ / 65.0 if curr_occ > 0 else 1.0), 1))) for v in base_curve]
-        
-        df_trend = pd.DataFrame({
-            "Live Utilization (%)": scaled_curve,
-            "Critical Threshold (75%)": [75.0] * len(hours),
-        }, index=hours)
-
-        st.line_chart(df_trend, color=["#38bdf8", "#ef4444"])
-        st.markdown(
-            f"""
-            <div style="font-size:0.82rem; color:#94a3b8;">
-                Monitored Live Occupancy: <b style="color:#34d399;">{insights['occupancy']:.1f}%</b> | 
-                Peak Projected Demand: <b style="color:#f59e0b;">{max(scaled_curve):.1f}%</b>
-            </div></div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with tab_dist:
-        st.markdown(
-            """
-            <div class="park-glass-card">
-                <h4 style="color:#34d399; margin:0 0 6px 0;">📊 Detection Distribution & Confidence Spread</h4>
-                <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:15px;">
-                    Visual balance of vacant vs occupied bays and distribution of neural classification certainty.
-                </p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            st.markdown("<b style='color:#e2e8f0; font-size:0.85rem;'>Bay Status Breakdown:</b>", unsafe_allow_html=True)
-            dist_df = pd.DataFrame({
-                "Count": [insights["available"], insights["occupied"]],
-            }, index=["Vacant (🟢)", "Occupied (🔴)"])
-            st.bar_chart(dist_df, color="#34d399")
-
-        with col_d2:
-            st.markdown("<b style='color:#e2e8f0; font-size:0.85rem;'>Model Confidence Spread:</b>", unsafe_allow_html=True)
-            conf_vals = [r["confidence"] if r["confidence"] is not None else 1.0 for r in results]
-            conf_bins = {
-                "High (90-100%)": sum(1 for c in conf_vals if c >= 0.90),
-                "Moderate (75-89%)": sum(1 for c in conf_vals if 0.75 <= c < 0.90),
-                "Edge (<75%)": sum(1 for c in conf_vals if c < 0.75),
-            }
-            conf_df = pd.DataFrame({"Slots": list(conf_bins.values())}, index=list(conf_bins.keys()))
-            st.bar_chart(conf_df, color="#818cf8")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab_rubric:
-        st.markdown(
-            """
-            <div class="park-glass-card">
-                <h4 style="color:#38bdf8; margin:0 0 6px 0;">🔬 Assessment Confusion Matrix & Rubric Artifacts</h4>
-                <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:15px;">
-                    Official test split evaluation results and confusion matrix generated during model training.
-                </p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        col_r1, col_r2 = st.columns([1.2, 1])
-        with col_r1:
-            matrix_path = ROOT_DIR / "models" / "confusion_matrix.png"
-            if matrix_path.exists():
-                st.image(str(matrix_path), caption="Evaluated on 15% Unseen Held-out Test Split", use_container_width=True)
-            else:
-                st.info("Confusion matrix artifact located at models/confusion_matrix.png")
-
-        with col_r2:
+    if image is None:
+        if source != "Upload":
             st.markdown(
                 """
-                <div style="background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 15px;">
-                    <div style="color: #38bdf8; font-weight: 700; margin-bottom: 8px;">Model Performance Summary:</div>
-                    <div style="font-size: 0.85rem; color: #e2e8f0; line-height: 1.6;">
-                        • <b>Model:</b> Neural Network (MLP) Classifier<br>
-                        • <b>Test Accuracy:</b> <span style="color:#34d399; font-weight:700;">100.0%</span><br>
-                        • <b>Validation Accuracy:</b> <span style="color:#34d399; font-weight:700;">100.0%</span><br>
-                        • <b>Precision (Empty):</b> 1.00<br>
-                        • <b>Recall (Occupied):</b> 1.00<br>
-                        • <b>F1-Score:</b> 1.00<br>
-                        • <b>Latency:</b> &lt; 1 ms per slot crop
-                    </div>
+                <div class="empty-stage">
+                  <h2>Choose a frame</h2>
+                  <p>Pick a saved lot. The chips above are the frames from this camera.</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+        st.stop()
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    with st.spinner("Reading this frame…"):
+        plate = reference()
+        bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        reading = read_lot(bgr, plate)
+        if not reading.slots:
+            reading = read_overhead(bgr)
 
-    # Detailed Telemetry Table
-    with st.expander("📋 Detailed Slot-by-Slot Telemetry Table", expanded=False):
-        table_data = []
-        for result in results:
-            confidence_text = f"{result['confidence']:.1%}" if result["confidence"] is not None else "Calibrated"
-            table_data.append({
-                "Slot ID": f"S{result['id']}",
-                "Grid Row": result["row"] + 1,
-                "Grid Column": result["col"] + 1,
-                "Status": "🟢 Available" if result["label"] == "empty" else "🔴 Occupied",
-                "Model Confidence": confidence_text,
-            })
-        st.dataframe(pd.DataFrame(table_data), hide_index=True, use_container_width=True)
+    if not reading.slots:
+        st.image(image, width="stretch")
+        st.markdown(
+            """
+            <div class="empty-stage">
+              <h2>No bays in this photo</h2>
+              <p>Use an overhead shot where the stall lines are visible, or pick a saved frame.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.stop()
 
-    st.caption("ParkVision AI Telemetry Engine • Course Assessment Submission • Built with OpenCV & Neural Vision")
+    shown = cv2.cvtColor(reading.aligned_bgr, cv2.COLOR_BGR2RGB)
+    occupied, empty = count_slots(reading.slots)
+    insights = summarize(occupied, empty)
+    annotated = annotate(shown, reading.slots)
+    usual = open_bay_average()
+    full_at, free_at = band_counts(insights.total)
+
+    stage, rail = st.columns([1.42, 0.78], gap="medium")
+    with stage:
+        with st.container(key="stage"):
+            view = st.segmented_control(
+                "View",
+                ["Split", "Overlay", "Camera"],
+                default="Split",
+                selection_mode="single",
+                key="view_mode",
+            )
+            if view is None:
+                view = "Split"
+            st.markdown(
+                """
+                <div class="legend">
+                  <span><i class="swatch" style="background:#3ddc84"></i>Empty</span>
+                  <span><i class="swatch" style="background:#ff5d5d"></i>Occupied</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if view == "Split":
+                camera, overlay = st.columns(2, gap="small")
+                with camera:
+                    st.markdown('<p class="view-label">Camera</p>', unsafe_allow_html=True)
+                    st.image(shown, width="stretch")
+                with overlay:
+                    st.markdown('<p class="view-label">Overlay</p>', unsafe_allow_html=True)
+                    st.image(annotated, width="stretch")
+            elif view == "Camera":
+                st.markdown('<p class="view-label">Camera</p>', unsafe_allow_html=True)
+                st.image(shown, width="stretch")
+            else:
+                st.markdown('<p class="view-label">Overlay</p>', unsafe_allow_html=True)
+                st.image(annotated, width="stretch")
+    with rail:
+        with st.container(key="railbox"):
+            st.markdown(
+                _rail_html(insights, reading.slots, full_at, free_at, usual.open_bays),
+                unsafe_allow_html=True,
+            )
+
+    if reading.same_camera:
+        note = (
+            "This frame matched the sample camera, so the bays come from that view's map. "
+            "The empty plate is samples/lot-11.jpg (Almeida et al., 2015, CC BY 4.0)."
+        )
+    elif reading.source == "lines":
+        note = "These bays were traced from the painted lines. Empty asphalt is green. A bay with a vehicle in it is red."
+    else:
+        note = (
+            "These bays were found in the photo itself, so the shot does not have to be the sample camera. "
+            "The reader is a YOLOv8n model trained on PKLot."
+        )
+    st.markdown(f'<p class="fineprint">{note}</p>', unsafe_allow_html=True)
+
+    with st.expander("How the call is made"):
+        st.markdown(
+            """
+            A photo of the sample camera uses a fixed grid of its lined rows.
+            Each bay is compared with an empty plate of the same lot. A poor
+            match means the bay is occupied. A bay that still roughly matches,
+            but is much busier than the empty asphalt, is counted too.
+
+            Any other overhead shot is read from the painted stall lines when
+            they are clear, and otherwise by a parking-space model trained on
+            lined lots. On a diagonal or herringbone lot, each stall is boxed
+            along its row. An open stall is marked when it sits between two
+            cars, or when both painted sides are visible and the middle is
+            bare asphalt.
+
+            The average number of open bays is taken across the saved frames.
+            Twice that average, scaled to this lot, is free and plays a short
+            chime. Half of it is full and plays a 3 second alarm. Anywhere
+            between is busy and plays a warning. The sound starts on its own,
+            including when the next lot falls in the same band.
+            """
+        )
+
+    cue = cue_for(insights.level)
+    if cue is not None:
+        _play_cue(cue)
 
 
 if __name__ == "__main__":
