@@ -47,7 +47,6 @@ st.set_page_config(
 # -------------------------------------------------------------------------
 @st.cache_data
 def generate_irritating_alarm_b64(duration: float = 3.3) -> str:
-    """High-frequency alternating siren buzzer (3.3s)."""
     sample_rate = 11025
     num_samples = int(sample_rate * duration)
     raw = bytearray()
@@ -73,7 +72,6 @@ def generate_irritating_alarm_b64(duration: float = 3.3) -> str:
 
 @st.cache_data
 def generate_chime_b64() -> str:
-    """Ascending clear chime."""
     sample_rate = 22050
     notes = [523.25, 659.25, 783.99]
     sub_dur = 0.25
@@ -155,11 +153,11 @@ def trigger_shaking_bell_alert(occupancy_pct: float):
 
 
 # -------------------------------------------------------------------------
-# 3. Exact Original SA CSS & Visual Theme + Highlighted Sidebar Arrows
+# 3. CSS — FIXED SIDEBAR VISIBILITY & ORIGINAL SA THEME
 # -------------------------------------------------------------------------
 _ORIGINAL_SA_CSS = """
 <style>
-    /* Root Background with Unsplash Parking Shot */
+    /* Background with Unsplash Parking Texture */
     .stApp {
         background-color: #070b14;
         background-image: 
@@ -171,69 +169,67 @@ _ORIGINAL_SA_CSS = """
         background-position: center;
         background-attachment: fixed;
         color: #e2e8f0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Keep header area transparent so it does NOT block the sidebar arrow button */
+    /* -----------------------------------------------------------
+       SIDEBAR & TOGGLE ARROW FIX (STOPS STREAMLIT FROM HIDING IT)
+       ----------------------------------------------------------- */
     header[data-testid="stHeader"] {
         background: transparent !important;
-        height: 3.5rem !important;
-        z-index: 100 !important;
-    }
-    header[data-testid="stHeader"] [data-testid="stToolbar"] {
-        display: none !important;
+        display: block !important;
+        height: 2.8rem !important;
+        z-index: 99999 !important;
     }
 
-    /* -------------------------------------------------------------------------
-       HIGHLIGHTED, ALWAYS-VISIBLE SIDEBAR COLLAPSE / EXPAND ARROWS
-       ------------------------------------------------------------------------- */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="collapsedControl"] {
+    /* Target the collapsed sidebar control chevron (>) */
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"] button {
         display: flex !important;
         visibility: visible !important;
         opacity: 1 !important;
+        background: #0284c7 !important;
+        color: #ffffff !important;
+        border: 2px solid #38bdf8 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 0 15px rgba(56, 189, 248, 0.85) !important;
+        padding: 5px !important;
+        position: fixed !important;
+        top: 0.6rem !important;
+        left: 0.8rem !important;
         z-index: 999999 !important;
-        background: rgba(15, 23, 42, 0.88) !important;
-        border: 1.5px solid #0ea5e9 !important;
-        border-radius: 10px !important;
-        box-shadow: 0 0 16px rgba(14, 165, 233, 0.65), inset 0 0 8px rgba(14, 165, 233, 0.25) !important;
-        transition: all 0.25s ease-in-out !important;
-        color: #38bdf8 !important;
-        padding: 4px !important;
     }
 
-    [data-testid="stSidebarCollapseButton"]:hover,
-    [data-testid="collapsedControl"]:hover {
-        background: rgba(14, 165, 233, 0.25) !important;
-        border-color: #38bdf8 !important;
-        transform: scale(1.08) !important;
-        box-shadow: 0 0 24px rgba(56, 189, 248, 0.9) !important;
+    [data-testid="collapsedControl"]:hover,
+    [data-testid="stSidebarCollapseButton"] button:hover {
+        background: #0369a1 !important;
+        transform: scale(1.1) !important;
     }
 
-    /* Make the arrow icon itself bright and glowing */
-    [data-testid="stSidebarCollapseButton"] svg,
-    [data-testid="collapsedControl"] svg {
-        fill: #38bdf8 !important;
-        stroke: #38bdf8 !important;
-        width: 1.5rem !important;
-        height: 1.5rem !important;
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg {
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+        width: 1.6rem !important;
+        height: 1.6rem !important;
     }
 
-    /* Sidebar Content Background & Border */
+    /* Sidebar container styling */
     [data-testid="stSidebar"] {
-        background-color: rgba(11, 17, 30, 0.92) !important;
-        backdrop-filter: blur(14px) !important;
-        -webkit-backdrop-filter: blur(14px) !important;
+        background-color: rgba(11, 17, 30, 0.96) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
         border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+        z-index: 100000 !important;
     }
 
     .block-container {
-        padding-top: 1.5rem;
+        padding-top: 1.0rem;
         padding-bottom: 3.5rem;
         max-width: 1400px;
     }
 
-    /* Glassmorphism Cards */
+    /* Glassmorphic Surveillance Cards */
     .park-glass-card {
         background: rgba(15, 23, 42, 0.75);
         backdrop-filter: blur(14px);
@@ -276,7 +272,7 @@ _ORIGINAL_SA_CSS = """
         color: #f8fafc;
     }
 
-    /* Filter Pills & Interactive Badges */
+    /* Interactive Badges & Pills */
     .slot-pill {
         display: inline-block;
         background: rgba(34, 197, 94, 0.18);
@@ -288,7 +284,6 @@ _ORIGINAL_SA_CSS = """
         font-weight: 600;
         margin: 4px;
         font-family: monospace;
-        letter-spacing: 0.02em;
     }
     .slot-pill.occ {
         background: rgba(239, 68, 68, 0.18);
@@ -296,7 +291,6 @@ _ORIGINAL_SA_CSS = """
         color: #f87171;
     }
 
-    /* Section Directories */
     .summary-card {
         background: rgba(15, 23, 42, 0.85);
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -313,11 +307,10 @@ _ORIGINAL_SA_CSS = """
         border: 1px solid rgba(34, 197, 94, 0.35);
     }
 </style>
-"""
-st.markdown(_ORIGINAL_SA_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# 4. Accurate Parking Geometry & Texture Analytics
+# 4. Parking Geometry & Texture Analytics Engine
 # -------------------------------------------------------------------------
 @dataclass
 class Stall:
@@ -330,7 +323,6 @@ class Stall:
 
 
 def generate_lot_stalls(w: int, h: int) -> list[Stall]:
-    """6 calibrated straight rows plus sidewalk diagonal wing."""
     stalls = []
     rows_y = [
         (0.185, 0.260),
@@ -395,7 +387,6 @@ def generate_lot_stalls(w: int, h: int) -> list[Stall]:
 
 
 def evaluate_stall(img: np.ndarray, stall: Stall) -> tuple[str, float]:
-    """Perspective-rectified analysis avoiding curb and aisle bleed."""
     if stall.quad is not None:
         pts = np.array(stall.quad, dtype=np.float32)
         dst_pts = np.array([[0, 0], [48, 0], [48, 96], [0, 96]], dtype=np.float32)
@@ -423,8 +414,10 @@ def evaluate_stall(img: np.ndarray, stall: Stall) -> tuple[str, float]:
 
 
 # -------------------------------------------------------------------------
-# 5. Sidebar Setup & Controls
+# 5. Sidebar Controls (Guaranteed Visible)
 # -------------------------------------------------------------------------
+sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png"))) if SAMPLES_DIR.exists() else []
+
 with st.sidebar:
     st.markdown("""
         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
@@ -439,51 +432,49 @@ with st.sidebar:
     st.markdown("#### 📡 System Status")
     st.markdown("""
         <div style="background: rgba(30, 41, 59, 0.75); border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.08); font-size: 0.85rem; line-height: 1.6;">
-            <b>PIPELINE ACTIVE:</b> Real-time dual-field monitor<br>
-            <b>Target Layout:</b> 126 Calibrated Bays<br>
-            <b>Mitigation:</b> Multi-weather & shadow invariance<br>
-            <b>Inference Latency:</b> &lt; 2 ms
+            <b>PIPELINE ACTIVE:</b> Dual-field monitor<br>
+            <b>Target Layout:</b> 126 Monitored Bays<br>
+            <b>Mitigation:</b> Shadow & weather invariance<br>
+            <b>Inference:</b> &lt; 2 ms
         </div>
     """, unsafe_allow_html=True)
     st.markdown("""
         <div style="margin-top: 10px; font-size: 0.75rem; color: #64748b;">
-            Course Assessment: <code>IADAI201-1000442-ZENE-SOPHIE-ANAND-SA</code>
+            Assessment: <code>IADAI201-1000442-ZENE-SOPHIE-ANAND-SA</code>
         </div>
     """, unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("#### ⚙️ Input Stream")
 
-    sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png"))) if SAMPLES_DIR.exists() else []
-    src_choice = st.radio("Source Mode", ["Sample Camera Footage", "Upload New Image"], label_visibility="collapsed")
+    src_choice = st.radio("Source Mode", ["Sample Camera Footage", "Upload New Image"], key="sidebar_src_radio")
 
     img_input = None
     if src_choice == "Upload New Image":
-        up = st.file_uploader("Upload overhead image", type=["jpg", "jpeg", "png", "webp"])
+        up = st.file_uploader("Upload overhead image", type=["jpg", "jpeg", "png", "webp"], key="sidebar_file_up")
         if up is not None:
             img_input = np.array(Image.open(up).convert("RGB"))
     else:
         if sample_files:
             names = [f.name for f in sample_files]
-            sel = st.selectbox("Select Camera Frame", names, index=0)
+            sel = st.selectbox("Select Camera Frame", names, index=0, key="sidebar_sample_select")
             img_input = np.array(Image.open(SAMPLES_DIR / sel).convert("RGB"))
         else:
-            st.info("No sample frames found in /samples.")
+            st.info("No sample frames in /samples.")
 
     st.markdown("---")
     st.markdown("#### 🔊 Audio Alert Test")
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        if st.button("🚨 Test Siren", use_container_width=True):
+        if st.button("🚨 Siren", use_container_width=True):
             trigger_shaking_bell_alert(92.5)
     with col_t2:
-        if st.button("🔔 Test Chime", use_container_width=True):
+        if st.button("🔔 Chime", use_container_width=True):
             b64_c = generate_chime_b64()
             st.markdown(f'<audio autoplay src="data:audio/wav;base64,{b64_c}"></audio>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
 # 6. Main Dashboard Render
 # -------------------------------------------------------------------------
-# SVG Optic Logo & Header
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
         <div style="display: flex; align-items: center; gap: 14px;">
@@ -505,13 +496,29 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
+# Dual-Selector Card on main page so user is NEVER trapped if sidebar is minimized
 if img_input is None:
-    st.markdown("""
-        <div class="park-glass-card" style="text-align: center; padding: 55px 20px;">
-            <h3 style="color: #94a3b8; margin-bottom: 8px;">No Camera Stream Selected</h3>
-            <p style="color: #64748b; font-size: 0.95rem;">Select a saved camera frame from the sidebar or upload custom footage.</p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div class="park-glass-card" style="text-align: center; padding: 40px 20px;">', unsafe_allow_html=True)
+    st.markdown("<h3 style='color: #e2e8f0; margin-bottom: 6px;'>Choose or Upload a Parking Stream</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px;'>Select a pre-loaded sample lot or upload custom overhead footage to begin.</p>", unsafe_allow_html=True)
+
+    c_m1, c_m2 = st.columns(2, gap="large")
+    with c_m1:
+        st.markdown("<b>Pre-Loaded Facility Frames</b>", unsafe_allow_html=True)
+        if sample_files:
+            quick_sample = st.selectbox("Choose Sample Frame", [f.name for f in sample_files], key="main_sample_pick")
+            if st.button("Load Frame", use_container_width=True, type="primary"):
+                img_input = np.array(Image.open(SAMPLES_DIR / quick_sample).convert("RGB"))
+                st.rerun()
+        else:
+            st.info("No sample frames available.")
+    with c_m2:
+        st.markdown("<b>Upload Custom Image</b>", unsafe_allow_html=True)
+        quick_up = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png", "webp"], key="main_quick_up")
+        if quick_up is not None:
+            img_input = np.array(Image.open(quick_up).convert("RGB"))
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 # Execution
@@ -582,7 +589,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# 8. Main Stage & Telemetry Filter (From Original Photo)
+# 8. Main Stage & Telemetry Filter
 # -------------------------------------------------------------------------
 col_stage, col_filter = st.columns([1.65, 0.85], gap="medium")
 
@@ -634,7 +641,7 @@ with col_filter:
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# 9. Real-Time Directory Panels (Photo 2)
+# 9. Real-Time Directory Panels
 # -------------------------------------------------------------------------
 st.markdown("""
     <div style="margin-top: 15px; margin-bottom: 10px; font-size: 1.15rem; font-weight: 700;">
