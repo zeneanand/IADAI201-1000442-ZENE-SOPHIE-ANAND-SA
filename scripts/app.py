@@ -2,14 +2,14 @@
 ParkVision AI | Smart Surveillance Intelligence
 Course Assessment Ref: IADAI201-1000442-ZENE-SOPHIE-ANAND-SA
 """
-
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 import io
 import math
-import struct
 from pathlib import Path
+import struct
 
 import cv2
 import matplotlib
@@ -17,9 +17,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import streamlit as st
 from PIL import Image
-
+import streamlit as st
 # -------------------------------------------------------------------------
 # Page Config & Paths
 # -------------------------------------------------------------------------
