@@ -96,68 +96,45 @@ def generate_chime_b64() -> str:
 
 def trigger_shaking_bell_alert(occupancy_pct: float):
     b64_sound = generate_irritating_alarm_b64(3.3)
-    alert_html = f"""
-    <div id="bell-alert-overlay" style="
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: rgba(3, 7, 18, 0.78); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-        z-index: 999999; display: flex; justify-content: center; align-items: center;
-        animation: alertFadeIn 0.25s ease-out; pointer-events: none;">
-        <div style="
-            background: rgba(15, 23, 42, 0.96); border: 2.5px solid #ef4444;
-            box-shadow: 0 0 60px rgba(239, 68, 68, 0.85), 0 0 120px rgba(239, 68, 68, 0.4);
-            border-radius: 24px; padding: 35px 55px; text-align: center;
-            display: flex; flex-direction: column; align-items: center; gap: 12px;
-            max-width: 480px; pointer-events: auto;">
-            <div style="font-size: 5.5rem; line-height: 1; display: inline-block;
-                        animation: bellShakeAnim 0.30s infinite ease-in-out; transform-origin: top center;">
-                🔔
-            </div>
-            <h2 style="color: #ef4444; margin: 0; font-size: 1.85rem; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">
-                CRITICAL CONGESTION
-            </h2>
-            <p style="color: #cbd5e1; margin: 0; font-size: 1.05rem; font-weight: 500;">
-                Facility Occupancy at <b style="color: #f87171;">{occupancy_pct:.1f}%</b>.<br>Maximum capacity threshold exceeded.
-            </p>
-        </div>
-    </div>
-    <audio autoplay playsinline>
-        <source src="data:audio/wav;base64,{b64_sound}" type="audio/wav">
-    </audio>
-    <style>
-        @keyframes bellShakeAnim {{
-            0% {{ transform: rotate(0deg); }}
-            20% {{ transform: rotate(18deg); }}
-            40% {{ transform: rotate(-18deg); }}
-            60% {{ transform: rotate(12deg); }}
-            80% {{ transform: rotate(-12deg); }}
-            100% {{ transform: rotate(0deg); }}
-        }}
-        @keyframes alertFadeIn {{
-            from {{ opacity: 0; transform: scale(0.92); }}
-            to {{ opacity: 1; transform: scale(1); }}
-        }}
-    </style>
-    <script>
-        setTimeout(() => {{
-            const el = document.getElementById("bell-alert-overlay");
-            if (el) {{
-                el.style.transition = "opacity 0.4s ease, transform 0.4s ease";
-                el.style.opacity = "0";
-                el.style.transform = "scale(0.96)";
-                setTimeout(() => el.remove(), 400);
-            }}
-        }}, 3500);
-    </script>
-    """
+    alert_html = (
+        '<div id="bell-alert-overlay" style="'
+        'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;'
+        'background: rgba(3, 7, 18, 0.78); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);'
+        'z-index: 999999; display: flex; justify-content: center; align-items: center;'
+        'animation: alertFadeIn 0.25s ease-out; pointer-events: none;">'
+        '<div style="'
+        'background: rgba(15, 23, 42, 0.96); border: 2.5px solid #ef4444;'
+        'box-shadow: 0 0 60px rgba(239, 68, 68, 0.85), 0 0 120px rgba(239, 68, 68, 0.4);'
+        'border-radius: 24px; padding: 35px 55px; text-align: center;'
+        'display: flex; flex-direction: column; align-items: center; gap: 12px;'
+        'max-width: 480px; pointer-events: auto;">'
+        '<div style="font-size: 5.5rem; line-height: 1; display: inline-block;'
+        'animation: bellShakeAnim 0.30s infinite ease-in-out; transform-origin: top center;">🔔</div>'
+        '<h2 style="color: #ef4444; margin: 0; font-size: 1.85rem; font-weight: 900; letter-spacing: 1px; text-transform: uppercase;">'
+        'CRITICAL CONGESTION</h2>'
+        f'<p style="color: #cbd5e1; margin: 0; font-size: 1.05rem; font-weight: 500;">'
+        f'Facility Occupancy at <b style="color: #f87171;">{occupancy_pct:.1f}%</b>.<br>Maximum capacity threshold exceeded.</p>'
+        '</div></div>'
+        f'<audio autoplay playsinline><source src="data:audio/wav;base64,{b64_sound}" type="audio/wav"></audio>'
+        '<style>'
+        '@keyframes bellShakeAnim { 0% { transform: rotate(0deg); } 20% { transform: rotate(18deg); } 40% { transform: rotate(-18deg); } 60% { transform: rotate(12deg); } 80% { transform: rotate(-12deg); } 100% { transform: rotate(0deg); } } '
+        '@keyframes alertFadeIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }'
+        '</style>'
+        '<script>'
+        'setTimeout(() => {'
+        'const el = document.getElementById("bell-alert-overlay");'
+        'if (el) { el.style.transition = "opacity 0.4s ease, transform 0.4s ease"; el.style.opacity = "0"; el.style.transform = "scale(0.96)"; setTimeout(() => el.remove(), 400); }'
+        '}, 3500);'
+        '</script>'
+    )
     st.markdown(alert_html, unsafe_allow_html=True)
 
 
 # -------------------------------------------------------------------------
-# 3. CSS — FIXED SIDEBAR VISIBILITY & ORIGINAL SA THEME
+# 3. CSS Theme & Permanent Glowing Sidebar Button
 # -------------------------------------------------------------------------
 _ORIGINAL_SA_CSS = """
 <style>
-    /* Background with Unsplash Parking Texture */
     .stApp {
         background-color: #070b14;
         background-image: 
@@ -172,9 +149,6 @@ _ORIGINAL_SA_CSS = """
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* -----------------------------------------------------------
-       SIDEBAR & TOGGLE ARROW FIX (STOPS STREAMLIT FROM HIDING IT)
-       ----------------------------------------------------------- */
     header[data-testid="stHeader"] {
         background: transparent !important;
         display: block !important;
@@ -182,7 +156,6 @@ _ORIGINAL_SA_CSS = """
         z-index: 99999 !important;
     }
 
-    /* Target the collapsed sidebar control chevron (>) */
     [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapseButton"] button {
         display: flex !important;
@@ -214,7 +187,6 @@ _ORIGINAL_SA_CSS = """
         height: 1.6rem !important;
     }
 
-    /* Sidebar container styling */
     [data-testid="stSidebar"] {
         background-color: rgba(11, 17, 30, 0.96) !important;
         backdrop-filter: blur(16px) !important;
@@ -229,7 +201,6 @@ _ORIGINAL_SA_CSS = """
         max-width: 1400px;
     }
 
-    /* Glassmorphic Surveillance Cards */
     .park-glass-card {
         background: rgba(15, 23, 42, 0.75);
         backdrop-filter: blur(14px);
@@ -241,7 +212,6 @@ _ORIGINAL_SA_CSS = """
         margin-bottom: 22px;
     }
 
-    /* KPI Grid */
     .kpi-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -272,7 +242,6 @@ _ORIGINAL_SA_CSS = """
         color: #f8fafc;
     }
 
-    /* Interactive Badges & Pills */
     .slot-pill {
         display: inline-block;
         background: rgba(34, 197, 94, 0.18);
@@ -307,10 +276,11 @@ _ORIGINAL_SA_CSS = """
         border: 1px solid rgba(34, 197, 94, 0.35);
     }
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(_ORIGINAL_SA_CSS, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# 4. Parking Geometry & Texture Analytics Engine
+# 4. Geometry & Texture Classifier
 # -------------------------------------------------------------------------
 @dataclass
 class Stall:
@@ -414,35 +384,37 @@ def evaluate_stall(img: np.ndarray, stall: Stall) -> tuple[str, float]:
 
 
 # -------------------------------------------------------------------------
-# 5. Sidebar Controls (Guaranteed Visible)
+# 5. Sidebar
 # -------------------------------------------------------------------------
 sample_files = sorted(list(SAMPLES_DIR.glob("*.jpg")) + list(SAMPLES_DIR.glob("*.png"))) if SAMPLES_DIR.exists() else []
 
 with st.sidebar:
-    st.markdown("""
-        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
-            <span style="font-size: 2.2rem;">🅿️</span>
-            <div>
-                <span style="font-weight: 800; font-size: 1.15rem; color: #38bdf8; letter-spacing: 0.05em;">PARKVISION</span><br>
-                <span style="font-size: 0.72rem; color: #94a3b8; letter-spacing: 0.12em;">SMART SURVEILLANCE AI</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">'
+        '<span style="font-size: 2.2rem;">🅿️</span>'
+        '<div>'
+        '<span style="font-weight: 800; font-size: 1.15rem; color: #38bdf8; letter-spacing: 0.05em;">PARKVISION</span><br>'
+        '<span style="font-size: 0.72rem; color: #94a3b8; letter-spacing: 0.12em;">SMART SURVEILLANCE AI</span>'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
     st.markdown("---")
     st.markdown("#### 📡 System Status")
-    st.markdown("""
-        <div style="background: rgba(30, 41, 59, 0.75); border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.08); font-size: 0.85rem; line-height: 1.6;">
-            <b>PIPELINE ACTIVE:</b> Dual-field monitor<br>
-            <b>Target Layout:</b> 126 Monitored Bays<br>
-            <b>Mitigation:</b> Shadow & weather invariance<br>
-            <b>Inference:</b> &lt; 2 ms
-        </div>
-    """, unsafe_allow_html=True)
-    st.markdown("""
-        <div style="margin-top: 10px; font-size: 0.75rem; color: #64748b;">
-            Assessment: <code>IADAI201-1000442-ZENE-SOPHIE-ANAND-SA</code>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="background: rgba(30, 41, 59, 0.75); border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.08); font-size: 0.85rem; line-height: 1.6;">'
+        '<b>PIPELINE ACTIVE:</b> Dual-field monitor<br>'
+        '<b>Target Layout:</b> 126 Monitored Bays<br>'
+        '<b>Mitigation:</b> Shadow & weather invariance<br>'
+        '<b>Inference:</b> &lt; 2 ms'
+        '</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div style="margin-top: 10px; font-size: 0.75rem; color: #64748b;">'
+        'Assessment: <code>IADAI201-1000442-ZENE-SOPHIE-ANAND-SA</code>'
+        '</div>',
+        unsafe_allow_html=True
+    )
     st.markdown("---")
     st.markdown("#### ⚙️ Input Stream")
 
@@ -475,28 +447,26 @@ with st.sidebar:
 # -------------------------------------------------------------------------
 # 6. Main Dashboard Render
 # -------------------------------------------------------------------------
-st.markdown("""
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-        <div style="display: flex; align-items: center; gap: 14px;">
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="24" height="24" rx="6" fill="#0284c7"/>
-                <path d="M7 17V7H12.5C14.433 7 16 8.567 16 10.5C16 12.433 14.433 14 12.5 14H9.5V17H7Z" fill="white"/>
-                <circle cx="18" cy="18" r="3" fill="#34d399"/>
-            </svg>
-            <div>
-                <h1 style="margin: 0; font-size: 1.95rem; letter-spacing: -0.02em; font-weight: 800;">ParkVision AI | Smart Facility Intelligence</h1>
-                <p style="margin: 0; color: #94a3b8; font-size: 0.90rem;">Autonomous Real-Time Occupancy & Spatial Congestion Infrastructure</p>
-            </div>
-        </div>
-        <div>
-            <span style="background: rgba(34, 197, 94, 0.18); color: #34d399; padding: 6px 14px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; border: 1px solid rgba(34,197,94,0.35);">
-                ● PIPELINE ACTIVE
-            </span>
-        </div>
-    </div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">'
+    '<div style="display: flex; align-items: center; gap: 14px;">'
+    '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<rect width="24" height="24" rx="6" fill="#0284c7"/>'
+    '<path d="M7 17V7H12.5C14.433 7 16 8.567 16 10.5C16 12.433 14.433 14 12.5 14H9.5V17H7Z" fill="white"/>'
+    '<circle cx="18" cy="18" r="3" fill="#34d399"/>'
+    '</svg>'
+    '<div>'
+    '<h1 style="margin: 0; font-size: 1.95rem; letter-spacing: -0.02em; font-weight: 800;">ParkVision AI | Smart Facility Intelligence</h1>'
+    '<p style="margin: 0; color: #94a3b8; font-size: 0.90rem;">Autonomous Real-Time Occupancy & Spatial Congestion Infrastructure</p>'
+    '</div></div>'
+    '<div>'
+    '<span style="background: rgba(34, 197, 94, 0.18); color: #34d399; padding: 6px 14px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; border: 1px solid rgba(34,197,94,0.35);">'
+    '● PIPELINE ACTIVE'
+    '</span>'
+    '</div></div>',
+    unsafe_allow_html=True
+)
 
-# Dual-Selector Card on main page so user is NEVER trapped if sidebar is minimized
 if img_input is None:
     st.markdown('<div class="park-glass-card" style="text-align: center; padding: 40px 20px;">', unsafe_allow_html=True)
     st.markdown("<h3 style='color: #e2e8f0; margin-bottom: 6px;'>Choose or Upload a Parking Stream</h3>", unsafe_allow_html=True)
@@ -567,26 +537,26 @@ if occ_pct >= 85.0:
 # -------------------------------------------------------------------------
 # 7. KPI Row
 # -------------------------------------------------------------------------
-st.markdown(f"""
-    <div class="kpi-grid">
-        <div class="kpi-card">
-            <span>TOTAL CAPACITY</span>
-            <strong>{total_bays}</strong>
-        </div>
-        <div class="kpi-card" style="border-left: 3px solid #ef4444;">
-            <span>OCCUPIED STALLS</span>
-            <strong style="color: #f87171;">{len(occupied_stalls)}</strong>
-        </div>
-        <div class="kpi-card" style="border-left: 3px solid #22c55e;">
-            <span>VACANT BAYS</span>
-            <strong style="color: #4ade80;">{len(available_stalls)}</strong>
-        </div>
-        <div class="kpi-card" style="border-left: 3px solid {'#ef4444' if occ_pct >= 80 else '#38bdf8'};">
-            <span>CONGESTION RATE</span>
-            <strong style="color: {'#ef4444' if occ_pct >= 80 else '#38bdf8'};">{occ_pct:.1f}%</strong>
-        </div>
-    </div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div class="kpi-grid">'
+    '<div class="kpi-card">'
+    '<span>TOTAL CAPACITY</span>'
+    f'<strong>{total_bays}</strong>'
+    '</div>'
+    '<div class="kpi-card" style="border-left: 3px solid #ef4444;">'
+    '<span>OCCUPIED STALLS</span>'
+    f'<strong style="color: #f87171;">{len(occupied_stalls)}</strong>'
+    '</div>'
+    '<div class="kpi-card" style="border-left: 3px solid #22c55e;">'
+    '<span>VACANT BAYS</span>'
+    f'<strong style="color: #4ade80;">{len(available_stalls)}</strong>'
+    '</div>'
+    f'<div class="kpi-card" style="border-left: 3px solid {\"#ef4444\" if occ_pct >= 80 else \"#38bdf8\"};">'
+    '<span>CONGESTION RATE</span>'
+    f'<strong style="color: {\"#ef4444\" if occ_pct >= 80 else \"#38bdf8\"};">{occ_pct:.1f}%</strong>'
+    '</div></div>',
+    unsafe_allow_html=True
+)
 
 # -------------------------------------------------------------------------
 # 8. Main Stage & Telemetry Filter
@@ -596,12 +566,13 @@ col_stage, col_filter = st.columns([1.65, 0.85], gap="medium")
 with col_stage:
     st.markdown('<div class="park-glass-card">', unsafe_allow_html=True)
     view_mode = st.radio("Display Mode", ["Split", "Overlay", "Camera"], horizontal=True, label_visibility="collapsed")
-    st.markdown("""
-        <div style="margin: 8px 0 12px; font-size: 0.84rem; color: #cbd5e1;">
-            <span style="color:#22c55e;">■ Green = Empty / Available</span> &nbsp;&nbsp;&nbsp;
-            <span style="color:#ef4444;">■ Red = Occupied</span>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="margin: 8px 0 12px; font-size: 0.84rem; color: #cbd5e1;">'
+        '<span style="color:#22c55e;">■ Green = Empty / Available</span> &nbsp;&nbsp;&nbsp;'
+        '<span style="color:#ef4444;">■ Red = Occupied</span>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     if view_mode == "Overlay":
         st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
@@ -643,25 +614,26 @@ with col_filter:
 # -------------------------------------------------------------------------
 # 9. Real-Time Directory Panels
 # -------------------------------------------------------------------------
-st.markdown("""
-    <div style="margin-top: 15px; margin-bottom: 10px; font-size: 1.15rem; font-weight: 700;">
-        📍 Real-Time Parking Space Directory (Where Each Car Is Parked)
-        <span style="font-size: 0.8rem; color: #94a3b8; font-weight: 400; margin-left: 12px;">Section-by-section breakdown identifying active vehicle positions vs. open stalls</span>
-    </div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div style="margin-top: 15px; margin-bottom: 10px; font-size: 1.15rem; font-weight: 700;">'
+    '📍 Real-Time Parking Space Directory (Where Each Car Is Parked)'
+    '<span style="font-size: 0.8rem; color: #94a3b8; font-weight: 400; margin-left: 12px;">Section-by-section breakdown identifying active vehicle positions vs. open stalls</span>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 c_occ, c_avail = st.columns(2, gap="medium")
 
 with c_occ:
     occ_names = ", ".join([s.name for s in occupied_stalls])
-    st.markdown(f"""
-        <div class="summary-card red">
-            <b style="color:#f87171;font-size:0.95rem;">🚗 Occupied Sections ({len(occupied_stalls)} Vehicles Parked):</b>
-            <p style="margin:8px 0 0;font-size:0.82rem;color:#fca5a5;line-height:1.6;font-family:monospace;">
-                {occ_names if occ_names else "None"}
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="summary-card red">'
+        f'<b style="color:#f87171;font-size:0.95rem;">🚗 Occupied Sections ({len(occupied_stalls)} Vehicles Parked):</b>'
+        '<p style="margin:8px 0 0;font-size:0.82rem;color:#fca5a5;line-height:1.6;font-family:monospace;">'
+        f'{occ_names if occ_names else "None"}'
+        '</p></div>',
+        unsafe_allow_html=True
+    )
 
 with c_avail:
     aisle_dict = {}
@@ -673,17 +645,17 @@ with c_avail:
         f"<b>{k}:</b> {', '.join(v)}" for k, v in aisle_dict.items()
     ])
 
-    st.markdown(f"""
-        <div class="summary-card green">
-            <b style="color:#4ade80;font-size:0.95rem;">🟢 Available Free Sections ({len(available_stalls)} Ready to Park):</b>
-            <div style="margin:8px 0 0;font-size:0.82rem;color:#86efac;line-height:1.6;font-family:monospace;">
-                {aisle_lines if aisle_lines else "Facility Full"}
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="summary-card green">'
+        f'<b style="color:#4ade80;font-size:0.95rem;">🟢 Available Free Sections ({len(available_stalls)} Ready to Park):</b>'
+        '<div style="margin:8px 0 0;font-size:0.82rem;color:#86efac;line-height:1.6;font-family:monospace;">'
+        f'{aisle_lines if aisle_lines else "Facility Full"}'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
 
 # -------------------------------------------------------------------------
-# 10. Analytics & Telemetry Tabs (Thermal Heatmap & 24hr Curve)
+# 10. Analytics & Telemetry Tabs
 # -------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("### 📊 Surveillance Analytics & Intelligence Visualizations")
