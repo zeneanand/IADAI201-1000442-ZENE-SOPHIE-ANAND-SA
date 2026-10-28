@@ -155,7 +155,7 @@ def trigger_shaking_bell_alert(occupancy_pct: float):
 
 
 # -------------------------------------------------------------------------
-# 3. Exact Original SA CSS & Visual Theme (Unsplash Background & Glassmorphism)
+# 3. Exact Original SA CSS & Visual Theme + Highlighted Sidebar Arrows
 # -------------------------------------------------------------------------
 _ORIGINAL_SA_CSS = """
 <style>
@@ -174,11 +174,61 @@ _ORIGINAL_SA_CSS = """
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
-    header[data-testid="stHeader"], [data-testid="stToolbar"] {
+    /* Keep header area transparent so it does NOT block the sidebar arrow button */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+        height: 3.5rem !important;
+        z-index: 100 !important;
+    }
+    header[data-testid="stHeader"] [data-testid="stToolbar"] {
         display: none !important;
     }
+
+    /* -------------------------------------------------------------------------
+       HIGHLIGHTED, ALWAYS-VISIBLE SIDEBAR COLLAPSE / EXPAND ARROWS
+       ------------------------------------------------------------------------- */
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        z-index: 999999 !important;
+        background: rgba(15, 23, 42, 0.88) !important;
+        border: 1.5px solid #0ea5e9 !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 16px rgba(14, 165, 233, 0.65), inset 0 0 8px rgba(14, 165, 233, 0.25) !important;
+        transition: all 0.25s ease-in-out !important;
+        color: #38bdf8 !important;
+        padding: 4px !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"]:hover,
+    [data-testid="collapsedControl"]:hover {
+        background: rgba(14, 165, 233, 0.25) !important;
+        border-color: #38bdf8 !important;
+        transform: scale(1.08) !important;
+        box-shadow: 0 0 24px rgba(56, 189, 248, 0.9) !important;
+    }
+
+    /* Make the arrow icon itself bright and glowing */
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="collapsedControl"] svg {
+        fill: #38bdf8 !important;
+        stroke: #38bdf8 !important;
+        width: 1.5rem !important;
+        height: 1.5rem !important;
+    }
+
+    /* Sidebar Content Background & Border */
+    [data-testid="stSidebar"] {
+        background-color: rgba(11, 17, 30, 0.92) !important;
+        backdrop-filter: blur(14px) !important;
+        -webkit-backdrop-filter: blur(14px) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+    }
+
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1.5rem;
         padding-bottom: 3.5rem;
         max-width: 1400px;
     }
